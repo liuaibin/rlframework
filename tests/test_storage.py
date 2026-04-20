@@ -64,7 +64,7 @@ class TestCheckpointManager:
         src.write_bytes(b"checkpoint data")
 
         manager = CheckpointManager(backend=mock_backend, upload_async=False)
-        result = manager.upload(str(src), "runs/ckpt.pt")
+        result = manager.upload_sync(str(src), "runs/ckpt.pt")
 
         mock_backend.upload.assert_called_once()
         assert result == "mock://runs/ckpt.pt"
@@ -106,7 +106,7 @@ class TestCheckpointManager:
         src.write_bytes(b"x")
 
         manager = CheckpointManager(backend=fail_backend, upload_async=False, upload_retries=3)
-        result = manager.upload(str(src), "f.pt")
+        result = manager.upload_sync(str(src), "f.pt")
         assert result == "mock://ok"
         assert fail_backend.upload.call_count == 3
 

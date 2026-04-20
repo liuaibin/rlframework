@@ -52,13 +52,13 @@ class TestValidateLR:
     def test_schedule_wrong_entry_type_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="[timestep, lr_value] pair"):
+        with pytest.raises(ValidationError, match=r"\[timestep, lr_value\] pair"):
             validate_lr([[0, 3e-4], "not a pair"])
 
     def test_schedule_entry_wrong_length_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="[timestep, lr_value] pair"):
+        with pytest.raises(ValidationError, match=r"\[timestep, lr_value\] pair"):
             validate_lr([[0, 3e-4], [100000]])   # missing lr_value
 
     def test_schedule_negative_timestep_raises(self):
