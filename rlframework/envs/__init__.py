@@ -1,3 +1,4 @@
-from rlframework.envs.remote_env import RemoteEnv, RemoteEnvConfig
+from rlframework.envs.remote_env import RemoteEnv
+from rlframework.envs.base_env import BaseEnv
 
-__all__ = ["RemoteEnv", "RemoteEnvConfig"]
+__all__ = ["RemoteEnv", "BaseEnv"]

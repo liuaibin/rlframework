@@ -1,136 +1,58 @@
-"""RemoteEnv - wraps a remote environment service using RLlib's ExternalEnv.
+"""RemoteEnv — abstract base class for remote environment clients.
 
-Architecture
-------------
-The remote environment runs as a separate service (e.g. a Python process or
-Docker container).  This class acts as the client that connects to that
-service and bridges it into the RLlib sampling pipeline.
+Subclass this to implement a custom remote env (HTTP, gRPC, Unix socket, etc.)::
 
-The remote service must implement a minimal HTTP/gRPC API:
-    POST /reset              → {"obs": ..., "info": ...}
-    POST /step  body={action} → {"obs":..., "reward":..., "terminated":...,
-                                  "truncated":..., "info":...}
-    POST /close              → {}
+    from rlframework.envs import RemoteEnv
 
-Usage::
+    class HTTPEnv(RemoteEnv):
+        def __init__(self, url):
+            super().__init__()
+            self._url = url
+            # ... set observation_space / action_space ...
 
-    from rlframework.envs import RemoteEnv, RemoteEnvConfig
+        def _send_reset(self, seed, options):
+            resp = requests.post(f"{self._url}/reset", json={...})
+            return resp.json()["obs"], resp.json().get("info", {})
 
-    cfg = RemoteEnvConfig(
-        url="http://env-service:8000",
-        env_id="Pendulum-v1",
-        timeout=10.0,
-    )
+        def _send_step(self, action):
+            resp = requests.post(f"{self._url}/step", json={"action": action})
+            d = resp.json()
+            return d["obs"], d["reward"], d["terminated"], d["truncated"], d.get("info", {})
 
-    # Register with gym so RLlib can create it by name
-    import gymnasium as gym
-    gym.register("remote-pendulum-v0",
-                 entry_point=lambda: RemoteEnv(cfg))
+        def _send_close(self):
+            requests.post(f"{self._url}/close")
 
-    config = CustomSACConfig().environment("remote-pendulum-v0")
+Then register::
+
+    tune.register_env("MyHTTPEnv-v0", lambda cfg: HTTPEnv(url="http://localhost:8000"))
 """
 
-from dataclasses import dataclass, field
-from typing import Any
-
-try:
-    import requests
-    _HAS_REQUESTS = True
-except ImportError:
-    _HAS_REQUESTS = False
+from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
 
 
-@dataclass
-class RemoteEnvConfig:
-    """Connection parameters for a remote environment service."""
-
-    url: str                          # Base URL of the env service
-    env_id: str = "unknown"           # Logical name (for logging)
-    timeout: float = 30.0             # HTTP request timeout in seconds
-    headers: dict[str, str] = field(default_factory=dict)
-    extra_params: dict[str, Any] = field(default_factory=dict)
-
-
 class RemoteEnv(gym.Env):
-    """Gymnasium-compatible wrapper around a remote env service.
+    """Abstract base class for remote environment clients.
 
-    The observation / action spaces are fetched from the service at
-    ``__init__`` time via ``GET /spaces``.  If the service does not expose
-    that endpoint you can pass *observation_space* and *action_space*
-    directly.
+    Bridges any external env service (HTTP, gRPC, Unix socket, shared memory, ...)
+    into the Gymnasium / RLlib interface.  Subclasses only need to implement
+    the three ``_send_*`` hooks; all Gymnasium boilerplate is pre-wired here.
 
-    Args:
-        config: Connection configuration.
-        observation_space: Override the observation space (optional).
-        action_space: Override the action space (optional).
+    Subclasses **must** set ``self.observation_space`` and ``self.action_space``
+    in ``__init__`` (or before the first ``reset`` call).
     """
 
-    def __init__(
-        self,
-        config: RemoteEnvConfig,
-        observation_space: gym.Space | None = None,
-        action_space: gym.Space | None = None,
-    ):
-        if not _HAS_REQUESTS:
-            raise ImportError(
-                "RemoteEnv requires the 'requests' package. "
-                "Install with: pip install requests"
-            )
+    metadata = {"render_modes": [], "render_fps": 0}
+
+    def __init__(self):
         super().__init__()
-        self._cfg = config
-        self._session = requests.Session()
-        self._session.headers.update(config.headers)
-
-        if observation_space is not None and action_space is not None:
-            self.observation_space = observation_space
-            self.action_space = action_space
-        else:
-            self._fetch_spaces()
+        self._elapsed_steps = 0
+        self.render_mode = None
 
     # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _url(self, path: str) -> str:
-        return f"{self._cfg.url.rstrip('/')}/{path.lstrip('/')}"
-
-    def _fetch_spaces(self) -> None:
-        """Retrieve spaces from the remote service's /spaces endpoint."""
-        try:
-            resp = self._session.get(
-                self._url("/spaces"), timeout=self._cfg.timeout
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # Expect data = {"observation_space": <gym Space JSON>,
-            #                "action_space": <gym Space JSON>}
-            # Simple box support for now; extend as needed.
-            obs = data["observation_space"]
-            act = data["action_space"]
-            self.observation_space = gym.spaces.Box(
-                low=np.float32(obs["low"]),
-                high=np.float32(obs["high"]),
-                shape=obs["shape"],
-                dtype=np.float32,
-            )
-            self.action_space = gym.spaces.Box(
-                low=np.float32(act["low"]),
-                high=np.float32(act["high"]),
-                shape=act["shape"],
-                dtype=np.float32,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to fetch spaces from {self._cfg.url}. "
-                f"Provide observation_space and action_space manually. "
-                f"Error: {exc}"
-            ) from exc
-
-    # ------------------------------------------------------------------
-    # Gymnasium API
+    # Public Gymnasium API — delegates to abstract _send_* hooks
     # ------------------------------------------------------------------
 
     def reset(
@@ -139,44 +61,61 @@ class RemoteEnv(gym.Env):
         seed: int | None = None,
         options: dict | None = None,
     ) -> tuple[np.ndarray, dict]:
-        payload: dict[str, Any] = {}
-        if seed is not None:
-            payload["seed"] = seed
-        resp = self._session.post(
-            self._url("/reset"),
-            json=payload,
-            timeout=self._cfg.timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return np.array(data["obs"], dtype=np.float32), data.get("info", {})
+        super().reset(seed=seed)
+        self._elapsed_steps = 0
+        obs, info = self._send_reset(seed=seed, options=options)
+        return np.asarray(obs, dtype=self.observation_space.dtype), info
 
     def step(
         self, action
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
-        if hasattr(action, "tolist"):
-            action = action.tolist()
-        resp = self._session.post(
-            self._url("/step"),
-            json={"action": action},
-            timeout=self._cfg.timeout,
-        )
-        resp.raise_for_status()
-        d = resp.json()
+        self._elapsed_steps += 1
+        obs, reward, terminated, truncated, info = self._send_step(action)
         return (
-            np.array(d["obs"], dtype=np.float32),
-            float(d["reward"]),
-            bool(d["terminated"]),
-            bool(d["truncated"]),
-            d.get("info", {}),
+            np.asarray(obs, dtype=self.observation_space.dtype),
+            float(reward),
+            bool(terminated),
+            bool(truncated),
+            info,
         )
 
     def close(self) -> None:
-        try:
-            self._session.post(
-                self._url("/close"), timeout=self._cfg.timeout
-            )
-        except Exception:
-            pass
-        finally:
-            self._session.close()
+        self._send_close()
+        super().close()
+
+    # ------------------------------------------------------------------
+    # Abstract hooks — subclasses must implement
+    # ------------------------------------------------------------------
+
+    def _send_reset(
+        self,
+        seed: int | None,
+        options: dict | None,
+    ) -> tuple[np.ndarray | dict, dict]:
+        """Send a reset request to the remote service.
+
+        Args:
+            seed: Optional seed forwarded to the remote service.
+            options: Optional config dict forwarded to the remote service.
+
+        Returns:
+            (observation, info) — same as Gymnasium's ``reset()``.
+        """
+        raise NotImplementedError
+
+    def _send_step(
+        self, action
+    ) -> tuple[np.ndarray | dict, float, bool, bool, dict]:
+        """Send a step request to the remote service.
+
+        Args:
+            action: Action from the agent.
+
+        Returns:
+            (observation, reward, terminated, truncated, info) — same as Gymnasium's ``step()``.
+        """
+        raise NotImplementedError
+
+    def _send_close(self) -> None:
+        """Send a close request to the remote service (optional)."""
+        pass
