@@ -273,12 +273,8 @@ from rlframework.algorithms.ppo import CustomPPO
 class RobotPPO(CustomPPO):
     """针对机器人控制优化的PPO"""
 
-    def loss_postprocess(self, total_loss, loss_components):
-        """添加关节平滑性约束"""
-        # 对动作进行额外约束，使机械臂运动更平滑
-        smoothness_penalty = 0.01 * loss_components.get("vf_loss", 0)
-        total_loss = total_loss + smoothness_penalty
-        return total_loss, loss_components
+    def on_after_training_step(self, result):
+        """添加自定义指标"""
 ```
 
 #### **文件：projects/project_a_robotics/src/project_a/main.py**

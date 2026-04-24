@@ -24,19 +24,6 @@ class TestFrameworkAlgorithmMixin:
         fake_result = {"episode_return_mean": 1.0}
         mixin.on_after_training_step(fake_result)  # should not raise
 
-    def test_compute_grads_postprocess_identity(self):
-        mixin = self._make_mixin()
-        grads = [1.0, 2.0]
-        returned = mixin.compute_grads_postprocess(grads)
-        assert returned == grads
-
-    def test_loss_postprocess_identity(self):
-        mixin = self._make_mixin()
-        total_loss = 0.5
-        components = {"policy_loss": 0.5}
-        returned = mixin.loss_postprocess(total_loss, components)
-        assert returned == total_loss
-
     def test_hooks_can_be_overridden(self):
         from rlframework.algorithms.base import FrameworkAlgorithmMixin
 

@@ -58,10 +58,6 @@ class CurriculumPPO(CustomPPO):
     def on_after_training_step(self, result) -> None:
         # runs after every training_step(), can inject extra metrics
         ...
-
-    def compute_grads_postprocess(self, grads):
-        # post-process gradients
-        ...
 ```
 
 ```bash

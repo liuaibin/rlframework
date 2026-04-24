@@ -3,7 +3,6 @@ Example 03: Custom Algorithm — overriding hooks
 ================================================
 Demonstrates:
 - Subclassing CustomPPO to override mixin hooks
-- Custom loss post-processing (e.g. gradient clipping)
 - Custom training step logic (e.g. curriculum learning)
 
 Run:
@@ -13,7 +12,6 @@ Run:
 from typing import Any
 
 import ray
-import torch
 
 from rlframework.algorithms.ppo import CustomPPO, CustomPPOConfig
 from rlframework.logging.callbacks import FrameworkCallback
@@ -49,17 +47,6 @@ class CurriculumPPO(CustomPPO):
     def on_after_training_step(self, result: dict[str, Any]) -> ResultDict:
         result["custom/curriculum_level"] = self._curriculum_level
         return result
-
-    # ------------------------------------------------------------------
-    # Hook: post-process computed gradients (e.g. global norm clipping)
-    # ------------------------------------------------------------------
-    def compute_grads_postprocess(self, grads):
-        if grads is None:
-            return grads
-        _clipped, _ = torch.nn.utils.clip_grad_norm_(
-            [g for g in grads if g is not None], max_norm=0.5
-        )
-        return grads
 
 
 # ---------------------------------------------------------------------------
