@@ -28,7 +28,12 @@ Alternatively, use the algorithm-specific configs (:class:`CustomPPOConfig`,
 :class:`CustomSACConfig`) which already include this mixin.
 """
 
+from functools import partial
 from typing import Any
+
+from ray.rllib.callbacks.callbacks import RLlibCallback
+
+from rlframework.logging.callbacks import FrameworkCallback
 
 
 class FrameworkConfigMixin:
@@ -56,6 +61,9 @@ class FrameworkConfigMixin:
         self._checkpoint_freq: int = 0           # 0 = manual only
         self._checkpoint_upload_async: bool = True
         self._checkpoint_local_dir: str = "./checkpoints"
+
+        # Bind checkpointing as an instance method to shadow PPOConfig.checkpointing.
+        self.checkpointing = self.framework_checkpointing
 
     # ------------------------------------------------------------------
     # Fluent setters
@@ -101,7 +109,7 @@ class FrameworkConfigMixin:
         self._metrics_reporter_configs = reporter_configs or {}
         return self
 
-    def checkpointing(
+    def framework_checkpointing(
         self,
         freq: int = 0,
         local_dir: str = "./checkpoints",
@@ -159,4 +167,31 @@ class FrameworkConfigMixin:
         return CheckpointManager(
             backend=self._storage_backend,
             backend_config=self._storage_backend_config,
+            upload_async=self._checkpoint_upload_async,
         )
+
+    def _apply_framework_runtime_config(self):
+        """Wire up runtime objects after all config has been set.
+
+        This method is called by the algorithm's ``setup()`` method.
+        It configures the callback class with reporters and checkpoint manager
+        unless the user has already provided a custom callback class.
+
+        Subclasses can override this to add additional wiring.
+        """
+        reporters = self.build_reporters()
+        ckpt_mgr = self.build_checkpoint_manager()
+
+        # Only auto-wire FrameworkCallback if the user hasn't provided a custom one.
+        # RLlib stores the user-provided callback class in self.callbacks_class.
+        # The default RLlib callback class is ray.rllib.callbacks.callbacks.RLlibCallback.
+        from ray.rllib.callbacks.callbacks import RLlibCallback
+        if getattr(self, "callbacks_class", RLlibCallback) is RLlibCallback:
+            self.callbacks(
+                FrameworkCallback.with_reporters(
+                    reporters,
+                    checkpoint_manager=ckpt_mgr,
+                    checkpoint_freq=self._checkpoint_freq,
+                    checkpoint_local_dir=self._checkpoint_local_dir,
+                )
+            )

@@ -11,6 +11,7 @@ Usage::
             return result
 """
 
+import importlib
 from typing import Any
 
 from ray.rllib.algorithms.sac import SAC, SACConfig
@@ -23,6 +24,23 @@ from rlframework.config.framework_config import FrameworkConfigMixin
 from rlframework.models.catalog import (
     SACCompositeCatalog,
 )
+
+
+def _resolve_replay_buffer_type(buffer_type: Any) -> type | None:
+    """Resolve replay buffer type from class object or import-path string."""
+    if isinstance(buffer_type, type):
+        return buffer_type
+    if not isinstance(buffer_type, str) or "." not in buffer_type:
+        return None
+    module_name, _, attr_name = buffer_type.rpartition(".")
+    if not module_name or not attr_name:
+        return None
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return None
+    resolved = getattr(module, attr_name, None)
+    return resolved if isinstance(resolved, type) else None
 
 
 class CustomSACConfig(SACConfig, FrameworkConfigMixin):
@@ -48,6 +66,33 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
         # Initialize the framework mixin
         self._init_framework_mixin()
 
+    def checkpointing(
+        self,
+        freq: int = 0,
+        local_dir: str = "./checkpoints",
+        upload_async: bool = True,
+    ) -> "CustomSACConfig":
+        """Store checkpointing preferences for use with :class:`~rlframework.storage.AutoCheckpoint`.
+
+        Call :meth:`~rlframework.config.FrameworkConfigMixin.build_checkpoint_manager`
+        to create the manager, then pass it to ``AutoCheckpoint``::
+
+            mgr = config.build_checkpoint_manager()
+            auto = AutoCheckpoint(mgr, freq=5, local_dir="./ckpts")
+
+            algo = config.build()
+            for i in range(1000):
+                result = algo.train()
+                auto.step(algo, iteration=i + 1, metrics=result)
+        """
+        FrameworkConfigMixin.checkpointing(self, freq=freq, local_dir=local_dir, upload_async=upload_async)
+        return self
+
+    @override(SACConfig)
+    def build(self, *args, **kwargs):
+        self._apply_framework_runtime_config()
+        return super().build(*args, **kwargs)
+
     @override(SACConfig)
     def validate(self) -> None:
         # Bypass the hard-coded whitelist in SACConfig.validate() that only
@@ -65,7 +110,10 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
                 return True
             if isinstance(buffer_type, str) and "Episode" in buffer_type:
                 return True
-            if isinstance(buffer_type, type) and issubclass(buffer_type, EpisodeReplayBuffer):
+            resolved = _resolve_replay_buffer_type(buffer_type)
+            if isinstance(resolved, type) and issubclass(
+                resolved, EpisodeReplayBuffer
+            ):
                 return True
             return False
 
@@ -130,9 +178,9 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
 
             # Set catalog class to SACCompositeCatalog
             self.rl_module(
-                policy_map_fn=lambda *args, **kwargs: RLModuleSpec(
+                rl_module_spec=RLModuleSpec(
                     catalog_class=SACCompositeCatalog,
-                    model_config_dict=self.model,
+                    model_config=self.model,
                 )
             )
 
@@ -152,9 +200,6 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
 
     @override(SAC)
     def setup(self, config: CustomSACConfig):
-        extra = self.build_extra_model_config()
-        if extra:
-            config.model.update(extra)
         super().setup(config)
 
     @override(SAC)
@@ -179,7 +224,9 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
 
         def _is_episode_buffer(t: Any) -> bool:
             if isinstance(t, str):
-                return "EpisodeReplayBuffer" in t
+                if "EpisodeReplayBuffer" in t:
+                    return True
+                t = _resolve_replay_buffer_type(t)
             if isinstance(t, type):
                 return issubclass(t, EpisodeReplayBuffer)
             return False
@@ -208,3 +255,4 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
                         self.metrics.log_value(key, value)
                     else:
                         self.metrics.log_value(key, value, window=1)
+

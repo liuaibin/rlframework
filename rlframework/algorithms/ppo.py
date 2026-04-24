@@ -7,9 +7,6 @@ customise PPO behaviour inside rlframework::
 
     class MyPPO(CustomPPO):
 
-        def build_extra_model_config(self):
-            return {"custom_model": "my_model", "custom_model_config": {}}
-
         def on_after_training_step(self, result):
             result["my_custom_metric"] = 42.0
             return result
@@ -43,7 +40,7 @@ class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
                      access_key="admin", secret_key="admin",
                      bucket="rl-models")
             .metrics(reporters=["influxdb", "file"])
-            .checkpointing(freq=10, upload_async=True)
+            .framework_checkpointing(freq=10, upload_async=True)
             .training(lr=1e-4)
         )
         algo = config.build()
@@ -129,30 +126,21 @@ class CustomPPO(FrameworkAlgorithmMixin, PPO):
 
     @override(PPO)
     def setup(self, config: CustomPPOConfig):
-        # Merge any extra model config from user subclass
-        extra = self.build_extra_model_config()
-        if extra:
-            config.model.update(extra)
         super().setup(config)
 
     @override(PPO)
     def training_step(self) -> None:
         self.on_before_training_step()
         super().training_step()
-        # 新 API stack: 从 metrics 中提取当前编译结果, 传给 hook, 再写回 metrics
         result = self.metrics.peek()
         result = self.on_after_training_step(result)
         if result:
             for key, value in result.items():
-                # 已有 key：push 值走原有 reduce/window 聚合逻辑
-                # 新 key（custom/* 等）：默认 EMA=0.01 会严重平滑阶梯值，改用 window=1
                 if isinstance(value, (int, float)):
                     if key in self.metrics:
                         self.metrics.log_value(key, value)
                     else:
                         self.metrics.log_value(key, value, window=1)
-
-
 
 
 class CustomReplayBufferPPO(CustomPPO):

@@ -5,17 +5,19 @@ is applied to a concrete RLlib Algorithm (e.g. PPO, SAC) so that framework
 users only need to override the hook methods they care about.
 """
 
+import logging
 from typing import Any
 
 from ray.rllib.utils.typing import ResultDict
 
 from rlframework.config.validators import (
-    validate_lr,
     validate_gamma,
     validate_gpu_config,
-    validate_workers,
+    validate_lr,
 )
 from rlframework.utils.exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 class FrameworkAlgorithmMixin:
@@ -28,25 +30,10 @@ class FrameworkAlgorithmMixin:
     Typical usage::
 
         class MyPPO(FrameworkAlgorithmMixin, CustomPPO):
-            def build_extra_model_config(self) -> dict:
-                return {"custom_model_config": {"hidden": 256}}
-
             def compute_grads_postprocess(self, grads):
                 # clip gradients after PPO default processing
                 return {k: v.clamp(-1, 1) for k, v in grads.items()}
     """
-
-    # ------------------------------------------------------------------
-    # Model construction hook
-    # ------------------------------------------------------------------
-
-    def build_extra_model_config(self) -> dict[str, Any]:
-        """Return extra ``model_config`` keys to merge into the algorithm config.
-
-        Called once during :py:meth:`setup`.  Subclasses should return a
-        plain dict; the base implementation returns ``{}``.
-        """
-        return {}
 
     # ------------------------------------------------------------------
     # Loss hooks

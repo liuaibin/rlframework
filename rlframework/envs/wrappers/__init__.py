@@ -1,9 +1,9 @@
 """Common gymnasium wrappers."""
 
-from gymnasium import Wrapper
+from gymnasium import ObservationWrapper, Wrapper
 
 
-class NormalizeObsWrapper(Wrapper):
+class NormalizeObsWrapper(ObservationWrapper):
     """Normalize observations to zero mean / unit variance using a running estimate.
 
     Args:
@@ -19,15 +19,19 @@ class NormalizeObsWrapper(Wrapper):
         self._count = 0
 
     def _update_stats(self, obs):
-        import numpy as np  # noqa: F401
+        import numpy as np
+
+        obs = obs.astype(np.float64, copy=False)
         if self._mean is None:
-            self._mean = obs.copy().astype(float)
-            self._var = obs.copy().astype(float) ** 2
-        else:
-            self._count += 1
-            delta = obs - self._mean
-            self._mean += delta / self._count
-            self._var += delta * (obs - self._mean)
+            self._mean = obs.copy()
+            self._var = np.zeros_like(obs, dtype=np.float64)
+            self._count = 1
+            return
+
+        self._count += 1
+        delta = obs - self._mean
+        self._mean += delta / self._count
+        self._var += delta * (obs - self._mean)
 
     def observation(self, obs):
         import numpy as np

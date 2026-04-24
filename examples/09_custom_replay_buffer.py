@@ -32,7 +32,9 @@ config = (
     CustomSACConfig()
     .environment("Pendulum-v1")
     .training(
-        lr=3e-4,
+        actor_lr=3e-4,
+        critic_lr=3e-4,
+        alpha_lr=3e-4,
         train_batch_size_per_learner=256,
         replay_buffer_config={
             "type": PrioritizedSumTreeBuffer,  # use the framework's buffer

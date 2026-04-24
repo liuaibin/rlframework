@@ -115,7 +115,11 @@ class ModelStore:
             )
             return upload_future
         else:
-            result = self._ckpt_mgr.upload(local_path, remote_path)
+            self._ckpt_mgr.upload(
+                local_path,
+                remote_path,
+                async_mode=False,
+            )
             self._model_mgr.register(
                 name=name,
                 version=version,
@@ -123,7 +127,7 @@ class ModelStore:
                 metrics=metrics,
                 metadata=metadata,
             )
-            return result
+            return remote_path
 
     def save_best(
         self,

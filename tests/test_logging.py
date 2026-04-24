@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # FileReporter
 # ---------------------------------------------------------------------------
@@ -100,24 +102,27 @@ class TestFrameworkCallback:
     def test_extract_metrics_flattens_dict(self, sample_metrics):
         from rlframework.logging.callbacks import FrameworkCallback
 
-        cb = FrameworkCallback.with_reporters([])
+        cb = FrameworkCallback.with_reporters([])()
         flat = cb._extract_metrics(sample_metrics)
 
         assert isinstance(flat, dict)
         # Should contain flattened keys
         assert any("episode_return_mean" in k for k in flat)
+        # Should keep numeric env-level custom metrics.
+        assert flat["num_episodes"] == 10
 
     def test_with_reporters_accepts_empty_list(self):
         from rlframework.logging.callbacks import FrameworkCallback
 
-        cb = FrameworkCallback.with_reporters([])
+        cb_factory = FrameworkCallback.with_reporters([])
+        cb = cb_factory()
         assert cb is not None
 
     def test_reporters_receive_metrics(self, sample_metrics):
         from rlframework.logging.callbacks import FrameworkCallback
 
         reporter = MagicMock()
-        cb = FrameworkCallback.with_reporters([reporter])
+        cb = FrameworkCallback.with_reporters([reporter])()
 
         # Add training_iteration so the callback can pass it to reporters
         sample_metrics["training_iteration"] = 5
@@ -129,3 +134,22 @@ class TestFrameworkCallback:
         call_args = reporter.report.call_args
         iteration_arg = call_args[1].get("iteration") or call_args[0][1]
         assert iteration_arg == 5
+
+    def test_extract_eval_metrics_keeps_custom_numeric_metrics(self):
+        from rlframework.logging.callbacks import FrameworkCallback
+
+        cb = FrameworkCallback.with_reporters([])()
+        eval_metrics = {
+            "env_runners": {
+                "episode_return_mean": 12.0,
+                "episode_len_mean": 20.0,
+                "success": 0.7,
+            },
+            "custom_eval_score": 3.14,
+        }
+        flat = cb._extract_eval_metrics(eval_metrics)
+
+        assert flat["eval/episode_return_mean"] == 12.0
+        assert flat["eval/success"] == 0.7
+        assert flat["eval/custom_eval_score"] == 3.14
+

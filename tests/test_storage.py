@@ -82,6 +82,17 @@ class TestCheckpointManager:
         assert isinstance(future, Future)
         manager.shutdown()
 
+    def test_upload_sync_mode_future_contains_backend_result(self, tmp_dir, mock_backend):
+        from rlframework.storage.checkpoint_manager import CheckpointManager
+
+        src = tmp_dir / "sync.pt"
+        src.write_bytes(b"data")
+
+        manager = CheckpointManager(backend=mock_backend, upload_async=False)
+        future = manager.upload(str(src), "sync/ckpt.pt")
+
+        assert future.result() == "mock://sync/ckpt.pt"
+
     def test_upload_directory_creates_tar(self, tmp_dir, mock_backend):
         from rlframework.storage.checkpoint_manager import CheckpointManager
 
@@ -95,6 +106,19 @@ class TestCheckpointManager:
         # backend.upload should have been called with a .tar path
         call_args = mock_backend.upload.call_args[0]
         assert call_args[0].endswith(".tar")
+        assert call_args[1] == "runs/ckpt_dir.tar"
+
+    def test_upload_directory_appends_tar_suffix_when_missing(self, tmp_dir, mock_backend):
+        from rlframework.storage.checkpoint_manager import CheckpointManager
+
+        ckpt_dir = tmp_dir / "ckpt_dir"
+        ckpt_dir.mkdir()
+        (ckpt_dir / "weights.pt").write_bytes(b"weights")
+
+        manager = CheckpointManager(backend=mock_backend, upload_async=False)
+        manager.upload(str(ckpt_dir), "runs/ckpt_dir")
+        call_args = mock_backend.upload.call_args[0]
+        assert call_args[1] == "runs/ckpt_dir.tar"
 
     def test_retry_on_failure(self, tmp_dir):
         from rlframework.storage.checkpoint_manager import CheckpointManager
@@ -175,3 +199,38 @@ class TestModelManager:
         mgr.register("modelB", "v1", "/b.tar")
         models = mgr.list_models()
         assert set(models) == {"modelA", "modelB"}
+
+
+class TestModelStore:
+    def test_save_and_load_directory_checkpoint_sync(self, tmp_dir):
+        from rlframework.storage.model_store import ModelStore
+
+        ckpt_dir = tmp_dir / "iter_1"
+        ckpt_dir.mkdir()
+        (ckpt_dir / "policy.pt").write_bytes(b"policy")
+
+        store = ModelStore(
+            backend="local",
+            backend_config={"root": str(tmp_dir / "store")},
+            catalogue_path=str(tmp_dir / "catalogue.json"),
+            upload_async=False,
+        )
+
+        saved_path = store.save(
+            name="ppo_cartpole",
+            version="iter_1",
+            local_path=str(ckpt_dir),
+            upload_async=False,
+        )
+        assert saved_path == "ppo_cartpole/iter_1.tar"
+
+        info = store.get("ppo_cartpole", "iter_1")
+        assert info is not None
+        assert info["path"] == "ppo_cartpole/iter_1.tar"
+
+        downloaded = store.load(
+            name="ppo_cartpole",
+            version="iter_1",
+            local_dir=str(tmp_dir / "downloaded.tar"),
+        )
+        assert Path(downloaded).exists()

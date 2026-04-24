@@ -272,16 +272,7 @@ from rlframework.algorithms.ppo import CustomPPO
 
 class RobotPPO(CustomPPO):
     """针对机器人控制优化的PPO"""
-    
-    def build_extra_model_config(self):
-        """使用更大的隐藏层处理复杂的运动学问题"""
-        return {
-            "model_config": {
-                "fcnet_hiddens": [512, 512, 256],
-                "fcnet_activation": "relu",
-            }
-        }
-    
+
     def loss_postprocess(self, total_loss, loss_components):
         """添加关节平滑性约束"""
         # 对动作进行额外约束，使机械臂运动更平滑
@@ -434,16 +425,9 @@ from rlframework.algorithms.sac import CustomSAC
 
 class TradingSAC(CustomSAC):
     """针对交易优化的SAC算法"""
-    
-    def build_extra_model_config(self):
-        """交易需要更细致的决策能力"""
-        return {
-            "model_config": {
-                "fcnet_hiddens": [256, 256],
-                "fcnet_activation": "relu",
-            }
-        }
-```
+
+    def on_after_training_step(self, result):
+        """交易后处理"""
 
 #### **文件：projects/project_b_trading/src/project_b/main.py**
 

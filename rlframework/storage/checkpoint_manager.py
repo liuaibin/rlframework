@@ -26,6 +26,7 @@ import logging
 import os
 import shutil
 import time
+import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from rlframework.storage.backends import BaseBackend, get_backend
@@ -71,37 +72,60 @@ class CheckpointManager:
     # ------------------------------------------------------------------
 
     def upload(
-        self, local_path: str, remote_name: str | None = None
-    ) -> Future:
-        """Upload a checkpoint, sync or async depending on *upload_async*.
+        self,
+        local_path: str,
+        remote_name: str | None = None,
+        async_mode: bool | None = None,
+    ) -> Future | str:
+        """Upload a checkpoint with optional per-call sync/async override.
 
         Args:
             local_path: Path to the local checkpoint file or directory.
             remote_name: Object / key name in the remote store.  Defaults to
                 the basename of *local_path*.
+            async_mode: Per-call override of async behavior.
+                - ``None`` (default): follow manager-level ``upload_async``.
+                - ``True``: force async and return a Future.
+                - ``False``: force sync and return a string path.
 
         Returns:
-            A :class:`concurrent.futures.Future`.
+            A :class:`concurrent.futures.Future` (async mode) or uploaded
+            remote path string (forced sync mode).
         """
         if remote_name is None:
             remote_name = os.path.basename(local_path.rstrip("/"))
-        if self._upload_async:
+        remote_name = self._normalize_remote_name(local_path, remote_name)
+        run_async = self._upload_async if async_mode is None else async_mode
+
+        if run_async:
             return self._executor.submit(
                 self._upload_with_retry, local_path, remote_name
             )
-        # upload_async=False: run synchronously, then wrap result in a Future
-        self._upload_with_retry(local_path, remote_name)
+
+        # Preserve legacy behavior: default sync mode still returns a Future.
+        result = self._upload_with_retry(local_path, remote_name)
+        if async_mode is False:
+            return result
+
         future: Future = Future()
-        future.set_result(remote_name)
+        future.set_result(result)
         return future
 
     def upload_sync(
         self, local_path: str, remote_name: str | None = None
     ) -> str:
-        """Explicitly run synchronously, ignoring *upload_async*."""
-        if remote_name is None:
-            remote_name = os.path.basename(local_path.rstrip("/"))
-        return self._upload_with_retry(local_path, remote_name)
+        """Deprecated: use ``upload(..., async_mode=False)`` instead."""
+        warnings.warn(
+            "upload_sync() is deprecated; use upload(..., async_mode=False).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        result = self.upload(
+            local_path=local_path,
+            remote_name=remote_name,
+            async_mode=False,
+        )
+        return result
 
     def download(self, remote_name: str, local_path: str) -> str:
         """Download *remote_name* from the backend to *local_path*.
@@ -127,7 +151,6 @@ class CheckpointManager:
         if os.path.isdir(local_path):
             tar_base = local_path.rstrip(os.sep)
             upload_path = shutil.make_archive(tar_base, "tar", local_path)
-            remote_name = "m_" + remote_name + ".tar"
             tmp_tar = upload_path
 
         self._fsync(upload_path)
@@ -149,6 +172,13 @@ class CheckpointManager:
         finally:
             if tmp_tar and os.path.exists(tmp_tar):
                 os.remove(tmp_tar)
+
+    @staticmethod
+    def _normalize_remote_name(local_path: str, remote_name: str) -> str:
+        """Normalize remote object name for directory uploads."""
+        if os.path.isdir(local_path) and not remote_name.endswith(".tar"):
+            return f"{remote_name}.tar"
+        return remote_name
 
     @staticmethod
     def _fsync(path: str) -> None:

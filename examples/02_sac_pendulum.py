@@ -5,7 +5,7 @@ Demonstrates:
 - CustomSAC with continuous action space
 - InfluxDB metrics reporter (optional — falls back to FileReporter)
 - PrometheusReporter for Grafana integration
-- Async MinIO checkpoint upload
+- AutoCheckpoint for periodic saves (best practice)
 
 Run:
     # Without external services (file reporter only)
@@ -20,12 +20,11 @@ Run:
 import os
 
 import ray
-
 from rlframework.algorithms.sac import CustomSACConfig
 from rlframework.logging.callbacks import FrameworkCallback
 from rlframework.logging.reporters import FileReporter, InfluxDBReporter
+from rlframework.storage import AutoCheckpoint, CheckpointManager
 from rlframework.storage.backends import get_backend
-from rlframework.storage.checkpoint_manager import CheckpointManager
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -70,16 +69,26 @@ if minio_endpoint:
 else:
     backend = get_backend("local", {"root": "./checkpoints/pendulum"})
 
+# ---------------------------------------------------------------------------
+# 5. AutoCheckpoint — independent of callbacks, full control in the loop
+# ---------------------------------------------------------------------------
 ckpt_manager = CheckpointManager(backend=backend, upload_async=True, upload_retries=3)
+auto = AutoCheckpoint(
+    ckpt_manager,
+    freq=20,
+    local_dir="./checkpoints/pendulum",
+)
 
 # ---------------------------------------------------------------------------
-# 4. Configure SAC
+# 6. Configure SAC — reporters wired automatically, no callback checkpointing
 # ---------------------------------------------------------------------------
 config = (
     CustomSACConfig()
     .environment("Pendulum-v1")
     .training(
-        lr=3e-4,
+        actor_lr=3e-4,
+        critic_lr=3e-4,
+        alpha_lr=3e-4,
         train_batch_size=256,
         replay_buffer_config={
             "type": "MultiAgentReplayBuffer",
@@ -88,18 +97,14 @@ config = (
         target_entropy="auto",
         tau=0.005,
         target_update_interval=1,
-        optimization_config={
-            "actor_learning_rate": 3e-4,
-            "critic_learning_rate": 3e-4,
-            "entropy_learning_rate": 3e-4,
-        },
     )
     .env_runners(num_env_runners=1, rollout_fragment_length=1)
+    .checkpointing(freq=20, local_dir="./checkpoints/pendulum")
     .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 # ---------------------------------------------------------------------------
-# 5. Train
+# 7. Train
 # ---------------------------------------------------------------------------
 algo = config.build()
 
@@ -109,11 +114,14 @@ for iteration in range(200):
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     print(f"[iter {iteration:03d}] mean_reward={mean_reward:.2f}")
 
+    # Periodic checkpoint — explicit and visible in the loop
+    auto.step(algo, iteration=iteration, metrics=result)
+
     # Save best checkpoint
     if mean_reward > best_reward:
         best_reward = mean_reward
         ckpt_path = algo.save_to_path("./checkpoints/pendulum/best")
-        future = ckpt_manager.upload(ckpt_path, "pendulum/best.tar")
+        ckpt_manager.upload(ckpt_path, "pendulum/best.tar")
         print(f"  -> new best checkpoint: {mean_reward:.2f}")
 
 # Wait for any pending uploads

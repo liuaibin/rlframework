@@ -16,48 +16,67 @@ Usage::
         .environment("CartPole-v1")
         .callbacks(FrameworkCallback.with_reporters(reporters))
     )
+
+Checkpointing is handled by :class:`~rlframework.storage.AutoCheckpoint`
+instead of this callback.  See ``examples/`` for a concrete usage pattern.
 """
 
+
+import logging
+import os
+from functools import partial
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN
 
+logger = logging.getLogger(__name__)
+
 
 class FrameworkCallback(RLlibCallback):
-    """RLlib callback that fans out training metrics to all configured reporters.
+    """RLlib callback that fans out training metrics.
 
     The reporters receive a flat metric dict after every training iteration.
     Resource metrics (CPU / memory) are optionally collected via *psutil*.
+    Checkpointing is handled by :class:`~rlframework.storage.AutoCheckpoint`.
 
     Args:
         reporters: List of :class:`~rlframework.logging.reporters.BaseReporter`
             instances to send metrics to.
         collect_resource_stats: When ``True``, attach process-level CPU and
             memory stats to every report.
+        checkpoint_manager: Pre-configured :class:`~rlframework.storage.CheckpointManager`.
+            When supplied, checkpointing is enabled with this manager.
+        checkpoint_freq: Checkpoint save frequency (iterations). ``0`` disables.
+        checkpoint_local_dir: Local directory for checkpoint files.
     """
 
     def __init__(
         self,
         reporters: list | None = None,
         collect_resource_stats: bool = False,
+        checkpoint_manager=None,
+        checkpoint_freq: int = 0,
+        checkpoint_local_dir: str = "./checkpoints",
     ):
         super().__init__()
         self._reporters = reporters or []
         self._collect_resource = collect_resource_stats
+        self._ckpt_manager = checkpoint_manager
+        self._ckpt_freq = checkpoint_freq
+        self._ckpt_local_dir = checkpoint_local_dir
 
-    # ray 序列化支持 (在多进程环境中需要)
     def __getstate__(self):
         state = self.__dict__.copy()
-        state["_reporters"] = []  # 序列化时排除 reporters
+        state["_reporters"] = []  # exclude reporters on serialization
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
 
     @classmethod
-    def with_reporters(cls, reporters: list, **kwargs) -> "FrameworkCallback":
-        """Convenience factory for use in ``.callbacks(...)``."""
-        return cls(reporters=reporters, **kwargs)
+    def with_reporters(cls, reporters: list, **kwargs):
+        """Return a callback factory compatible with ``config.callbacks(...)``."""
+        return partial(cls, reporters=reporters, **kwargs)
 
     # ------------------------------------------------------------------
     # RLlib hooks
@@ -74,13 +93,7 @@ class FrameworkCallback(RLlibCallback):
         rl_module=None,
         **kwargs,
     ) -> None:
-        """Hook reserved for future per-episode metric injection.
-
-        Phase tagging is handled at the reporting layer
-        (``on_train_result`` → ``train/``, ``on_evaluate_end`` → ``eval/``);
-        per-episode custom metrics for the new API stack should be logged via
-        ``metrics_logger`` rather than through episode attributes.
-        """
+        """Hook reserved for future per-episode metric injection."""
         pass
 
     def on_train_result(
@@ -117,9 +130,8 @@ class FrameworkCallback(RLlibCallback):
         for reporter in self._reporters:
             try:
                 reporter.report(metrics, iteration=iteration, phase=phase)
-            except Exception as exc:   # never crash the training loop
-                import logging
-                logging.getLogger(__name__).warning(
+            except Exception as exc:
+                logger.warning(
                     "Reporter %s failed: %s", reporter, exc
                 )
 
@@ -144,12 +156,32 @@ class FrameworkCallback(RLlibCallback):
             "num_env_steps_trained_lifetime", 0
         )
 
-        # Learner results (policy loss, value loss, etc.)
+        for key, value in env_runners.items():
+            if key in {EPISODE_RETURN_MEAN, "episode_len_mean"}:
+                continue
+            if isinstance(value, (int, float)):
+                flat[key] = value
+
         learner = result.get("learner_results", {})
         for module_id, module_stats in learner.items():
             for k, v in module_stats.items():
                 if isinstance(v, (int, float)):
                     flat[f"learner/{module_id}/{k}"] = v
+
+        known_top_level = {
+            "training_iteration",
+            "time_total_s",
+            "num_env_steps_sampled_lifetime",
+            "num_env_steps_trained_lifetime",
+            ENV_RUNNER_RESULTS,
+            "learner_results",
+            "evaluation",
+        }
+        for key, value in result.items():
+            if key in known_top_level:
+                continue
+            if isinstance(value, (int, float)):
+                flat[key] = value
 
         return flat
 
@@ -162,13 +194,23 @@ class FrameworkCallback(RLlibCallback):
         flat["eval/episode_return_mean"] = env_runners.get(EPISODE_RETURN_MEAN, 0.0)
         flat["eval/episode_len_mean"] = env_runners.get("episode_len_mean", 0.0)
 
+        for key, value in env_runners.items():
+            if key in {EPISODE_RETURN_MEAN, "episode_len_mean"}:
+                continue
+            if isinstance(value, (int, float)):
+                flat[f"eval/{key}"] = value
+
+        for key, value in evaluation_metrics.items():
+            if key in {ENV_RUNNER_RESULTS, "training_iteration"}:
+                continue
+            if isinstance(value, (int, float)):
+                flat[f"eval/{key}"] = value
+
         return flat
 
     @staticmethod
     def _resource_stats() -> dict:
         try:
-            import os
-
             import psutil
             proc = psutil.Process(os.getpid())
             mem = proc.memory_info()

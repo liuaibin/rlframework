@@ -4,21 +4,21 @@ Example 01: PPO on CartPole-v1 (minimal usage)
 Demonstrates the simplest possible usage of rlframework:
 - CustomPPO with default settings
 - FileReporter for local metrics logging
-- Local checkpoint storage
-- Model reload and resume training
+- AutoCheckpoint for periodic saves (best practice)
+- Manual best-model save in training loop
 
 Run:
     python rlframework/examples/01_ppo_cartpole.py
 """
-import os
 import glob
+import os
 
 import ray
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.logging.callbacks import FrameworkCallback
 from rlframework.logging.reporters import FileReporter
+from rlframework.storage import AutoCheckpoint, CheckpointManager
 from rlframework.storage.backends import get_backend
-from rlframework.storage.checkpoint_manager import CheckpointManager
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -32,12 +32,22 @@ os.makedirs("./logs", exist_ok=True)
 reporters = [FileReporter(filepath="./logs/cartpole_metrics.jsonl")]
 
 # ---------------------------------------------------------------------------
-# 3. Build CheckpointManager (local backend)
+# 3. Storage backend for remote uploads (optional)
 # ---------------------------------------------------------------------------
 backend = get_backend("local", {"root": "./checkpoints/cartpole"})
-ckpt_manager = CheckpointManager(backend=backend, upload_async=True)
+
 # ---------------------------------------------------------------------------
-# 4. Configure algorithm
+# 5. AutoCheckpoint — independent of callbacks, full control in the loop
+# ---------------------------------------------------------------------------
+ckpt_manager = CheckpointManager(backend=backend, upload_async=True)
+auto = AutoCheckpoint(
+    ckpt_manager,
+    freq=5,
+    local_dir="./checkpoints/cartpole",
+)
+
+# ---------------------------------------------------------------------------
+# 6. Configure algorithm — reporters wired automatically, no callback checkpointing
 # ---------------------------------------------------------------------------
 config = (
     CustomPPOConfig()
@@ -49,11 +59,12 @@ config = (
         minibatch_size=128,
     )
     .env_runners(num_env_runners=2)
-    .callbacks(lambda: FrameworkCallback(reporters=reporters))
+    .checkpointing(freq=5, local_dir="./checkpoints/cartpole")
+    .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 # ---------------------------------------------------------------------------
-# 5. Helper: find latest checkpoint
+# 7. Helper: find latest checkpoint
 # ---------------------------------------------------------------------------
 def find_latest_checkpoint(checkpoint_dir: str):
     """Find the most recent checkpoint by modification time."""
@@ -64,11 +75,10 @@ def find_latest_checkpoint(checkpoint_dir: str):
     return max(checkpoints, key=os.path.getmtime)
 
 # ---------------------------------------------------------------------------
-# 6. Train or Resume
+# 8. Train or Resume
 # ---------------------------------------------------------------------------
 algo = config.build()
 
-# Check for existing checkpoints to resume training
 checkpoint_base = os.path.abspath("./checkpoints/cartpole")
 latest_ckpt = find_latest_checkpoint(checkpoint_base)
 print(latest_ckpt)
@@ -76,7 +86,6 @@ if latest_ckpt:
     print(f"Found existing checkpoint: {latest_ckpt}")
     print("Restoring model from checkpoint...")
     algo.restore_from_path(latest_ckpt)
-    # Extract iteration number from checkpoint path for resuming
     iter_num = int(os.path.basename(latest_ckpt).split("_")[1])
     start_iter = iter_num
     print(f"Resuming from iteration {start_iter}")
@@ -84,20 +93,26 @@ else:
     print("No existing checkpoint found, starting fresh training.")
     start_iter = 0
 
+best_reward = float("-inf")
 for iteration in range(start_iter, 15):
     result = algo.train()
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     print(f"[iter {iteration:03d}] mean_reward={mean_reward:.2f}")
 
-    # Save checkpoint every 5 iterations
-    if (iteration + 1) % 5 == 0:
-        # 使用绝对路径 (ray 需要完整路径)
-        ckpt_path = algo.save_to_path(
-            os.path.abspath(f"./checkpoints/cartpole/iter_{iteration+1}")
-        )
-        ckpt_manager.upload(ckpt_path, f"iter_{iteration+1}")
-        print(f"  -> checkpoint saved: {ckpt_path}")
+    # Periodic checkpoint — now explicit and visible in the loop
+    auto.step(algo, iteration=iteration, metrics=result)
 
+    # Best model save
+    if mean_reward > best_reward:
+        best_reward = mean_reward
+        ckpt_path = algo.save_to_path(
+            os.path.abspath(f"./checkpoints/cartpole/best")
+        )
+        ckpt_manager.upload(ckpt_path, "best.tar")
+        print(f"  -> new best checkpoint: {mean_reward:.2f}")
+
+# Shutdown the shared manager to flush async uploads
+ckpt_manager.shutdown()
 algo.stop()
 ray.shutdown()
 print("Done. Metrics written to ./logs/cartpole_metrics.jsonl")
