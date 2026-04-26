@@ -51,6 +51,11 @@ class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
         # Initialize the framework mixin
         self._init_framework_mixin()
 
+    @override(PPOConfig)
+    def build(self, *args, **kwargs):
+        self._apply_framework_runtime_config()
+        return super().build(*args, **kwargs)
+
     def framework_models(
         self,
         encoder: str | None = None,

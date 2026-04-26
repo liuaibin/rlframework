@@ -14,11 +14,14 @@ Usage::
     config = (
         CustomPPOConfig()
         .environment("CartPole-v1")
+        .evaluation(evaluation_interval=5)
         .callbacks(FrameworkCallback.with_reporters(reporters))
     )
 
-Checkpointing is handled by :class:`~rlframework.storage.AutoCheckpoint`
-instead of this callback.  See ``examples/`` for a concrete usage pattern.
+Periodic checkpointing is driven by
+:meth:`~rlframework.config.FrameworkConfigMixin.checkpointing`.
+Best-model saving is driven by :meth:`on_evaluate_end` and requires evaluation
+to be enabled.  See ``examples/`` for a concrete usage pattern.
 """
 
 
@@ -33,11 +36,21 @@ logger = logging.getLogger(__name__)
 
 
 class FrameworkCallback(RLlibCallback):
-    """RLlib callback that fans out training metrics.
+    """RLlib callback that fans out training metrics and manages checkpoints.
 
     The reporters receive a flat metric dict after every training iteration.
     Resource metrics (CPU / memory) are optionally collected via *psutil*.
-    Checkpointing is handled by :class:`~rlframework.storage.AutoCheckpoint`.
+
+    Checkpoint behaviour is independent of the ``checkpoint_manager``:
+
+    - **Local checkpoint saving** — always active when ``checkpoint_freq > 0``,
+      controlled by :meth:`~rlframework.config.FrameworkConfigMixin.checkpointing`.
+      Saves model snapshots to ``checkpoint_local_dir`` on disk.
+      **Never** uploaded to the remote backend.
+    - **Best model** — after each evaluation round (``on_evaluate_end``), the model
+      is saved locally as ``best/`` if the eval return exceeds the best seen so far.
+      Remote upload to the backend is performed every ``best_upload_freq`` improvements
+      (or skipped if ``0``).  Requires evaluation to be enabled in the config.
 
     Args:
         reporters: List of :class:`~rlframework.logging.reporters.BaseReporter`
@@ -45,9 +58,15 @@ class FrameworkCallback(RLlibCallback):
         collect_resource_stats: When ``True``, attach process-level CPU and
             memory stats to every report.
         checkpoint_manager: Pre-configured :class:`~rlframework.storage.CheckpointManager`.
-            When supplied, checkpointing is enabled with this manager.
-        checkpoint_freq: Checkpoint save frequency (iterations). ``0`` disables.
-        checkpoint_local_dir: Local directory for checkpoint files.
+            When supplied, best-model snapshots are uploaded to the
+            configured remote backend.  Optional — local saving still works without it.
+        checkpoint_freq: Save a local checkpoint every *N* training iterations.
+            ``0`` disables local checkpointing.
+        checkpoint_local_dir: Local directory for periodic checkpoint snapshots.
+        best_local_dir: Local directory for the best-model snapshot.
+        best_upload_freq: Upload the best model to the remote backend every *N*
+            improvements.  ``1`` (default) uploads on every improvement; ``5`` uploads
+            every 5 improvements; ``0`` disables remote upload of the best model.
     """
 
     def __init__(
@@ -57,13 +76,23 @@ class FrameworkCallback(RLlibCallback):
         checkpoint_manager=None,
         checkpoint_freq: int = 0,
         checkpoint_local_dir: str = "./checkpoints",
+        best_local_dir: str | None = None,
+        best_upload_freq: int = 1,
     ):
         super().__init__()
         self._reporters = reporters or []
         self._collect_resource = collect_resource_stats
         self._ckpt_manager = checkpoint_manager
         self._ckpt_freq = checkpoint_freq
-        self._ckpt_local_dir = checkpoint_local_dir
+        # Convert to absolute paths so PyArrow (used by RLlib's save_to_path)
+        # can handle them.
+        self._ckpt_local_dir = os.path.abspath(checkpoint_local_dir)
+        self._best_local_dir = os.path.abspath(
+            best_local_dir or (checkpoint_local_dir + "/best")
+        )
+        self._best_reward = float("-inf")
+        self._best_upload_freq = max(0, best_upload_freq)
+        self._best_improvement_count = 0
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -106,6 +135,8 @@ class FrameworkCallback(RLlibCallback):
         iteration = result.get("training_iteration", 0)
         self._fan_out(metrics, iteration=iteration, phase="train")
 
+        self._save_periodic_checkpoint(algorithm, iteration)
+
     def on_evaluate_end(
         self,
         *,
@@ -114,12 +145,20 @@ class FrameworkCallback(RLlibCallback):
         evaluation_metrics: dict,
         **kwargs,
     ) -> None:
-        """Report evaluation metrics separately with ``phase="eval"``."""
+        """Report evaluation metrics and update the best model if improved.
+
+        Evaluation metrics are fanned out to reporters with ``phase="eval"``.
+        If the eval return exceeds the best seen so far, the current model is
+        saved locally as the best checkpoint and optionally uploaded to the
+        remote backend (if a CheckpointManager is configured).
+        """
         metrics = self._extract_eval_metrics(evaluation_metrics)
         if self._collect_resource:
             metrics.update(self._resource_stats())
-        iteration = evaluation_metrics.get("training_iteration", 0)
+        iteration = algorithm.training_iteration if algorithm is not None else 0
         self._fan_out(metrics, iteration=iteration, phase="eval")
+
+        self._update_best_model_if_improved(algorithm, metrics, iteration)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -133,6 +172,54 @@ class FrameworkCallback(RLlibCallback):
             except Exception as exc:
                 logger.warning(
                     "Reporter %s failed: %s", reporter, exc
+                )
+
+    def _save_periodic_checkpoint(self, algorithm, iteration: int) -> None:
+        """Save a periodic checkpoint if *iteration* hits the configured frequency.
+
+        Periodic checkpoints are always saved locally (when ``checkpoint_freq > 0``)
+        and are **never** uploaded to the remote backend.  Only the best model is
+        uploaded remotely, with frequency control.
+        """
+        if self._ckpt_freq <= 0:
+            return
+        if iteration % self._ckpt_freq != 0:
+            return
+
+        ckpt_name = f"iter_{iteration:06d}"
+        ckpt_path = os.path.join(self._ckpt_local_dir, ckpt_name)
+        os.makedirs(self._ckpt_local_dir, exist_ok=True)
+        saved_path = algorithm.save_to_path(ckpt_path)
+        logger.info("Periodic checkpoint saved: %s", saved_path)
+
+    def _update_best_model_if_improved(
+        self, algorithm, eval_metrics: dict, iteration: int
+    ) -> None:
+        """Save and optionally upload the current model if eval reward beats the best seen.
+
+        The local best model is always saved when reward improves, regardless of
+        whether a remote storage backend is configured.  Remote upload is performed
+        every ``best_upload_freq`` improvements; set to ``0`` to disable upload.
+        """
+        eval_return = eval_metrics.get("eval/episode_return_mean", float("-inf"))
+        if eval_return <= self._best_reward:
+            return
+
+        self._best_reward = eval_return
+        self._best_improvement_count += 1
+        os.makedirs(self._best_local_dir, exist_ok=True)
+        local_path = algorithm.save_to_path(self._best_local_dir)
+        logger.info(
+            "New best model (eval_reward=%.2f, iter=%d) saved to %s.",
+            eval_return, iteration, local_path,
+        )
+
+        if self._ckpt_manager is not None and self._best_upload_freq > 0:
+            if self._best_improvement_count % self._best_upload_freq == 0:
+                self._ckpt_manager.upload(local_path, "best.tar")
+                logger.info(
+                    "Best model upload triggered (improvement #%d, freq=%d).",
+                    self._best_improvement_count, self._best_upload_freq,
                 )
 
     # ------------------------------------------------------------------

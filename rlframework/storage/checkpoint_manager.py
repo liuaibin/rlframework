@@ -64,8 +64,22 @@ class CheckpointManager:
             # Accept any duck-typed backend (BaseBackend subclass or mock)
             self._backend: BaseBackend = backend  # type: ignore[assignment]
         self._upload_async = upload_async
-        self._executor = ThreadPoolExecutor(max_workers=upload_workers)
+        self._executor: ThreadPoolExecutor | None = None
         self._retries = upload_retries
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """Lazily create the thread pool (avoids pickling ThreadPoolExecutor)."""
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=2)
+        return self._executor
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_executor"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,7 +112,7 @@ class CheckpointManager:
         run_async = self._upload_async if async_mode is None else async_mode
 
         if run_async:
-            return self._executor.submit(
+            return self._get_executor().submit(
                 self._upload_with_retry, local_path, remote_name
             )
 
@@ -137,7 +151,8 @@ class CheckpointManager:
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the upload thread pool."""
-        self._executor.shutdown(wait=wait)
+        if self._executor is not None:
+            self._executor.shutdown(wait=wait)
 
     # ------------------------------------------------------------------
     # Private helpers

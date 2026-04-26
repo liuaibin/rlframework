@@ -4,8 +4,10 @@ Example 02: SAC on Pendulum-v1
 Demonstrates:
 - CustomSAC with continuous action space
 - InfluxDB metrics reporter (optional — falls back to FileReporter)
-- PrometheusReporter for Grafana integration
-- AutoCheckpoint for periodic saves (best practice)
+- Automatic periodic checkpoint saving + best-model saving (on eval improvement)
+
+Everything checkpoint-related is driven by the config — no manual save logic
+in the training loop needed.
 
 Run:
     # Without external services (file reporter only)
@@ -23,8 +25,6 @@ import ray
 from rlframework.algorithms.sac import CustomSACConfig
 from rlframework.logging.callbacks import FrameworkCallback
 from rlframework.logging.reporters import FileReporter, InfluxDBReporter
-from rlframework.storage import AutoCheckpoint, CheckpointManager
-from rlframework.storage.backends import get_backend
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -51,36 +51,7 @@ if influxdb_url:
     print(f"InfluxDB reporter enabled: {influxdb_url}")
 
 # ---------------------------------------------------------------------------
-# 3. Storage backend — MinIO if configured, otherwise local
-# ---------------------------------------------------------------------------
-minio_endpoint = os.environ.get("MINIO_ENDPOINT")
-if minio_endpoint:
-    backend = get_backend(
-        "minio",
-        {
-            "endpoint": minio_endpoint,
-            "access_key": os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
-            "secret_key": os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
-            "bucket": "rl-checkpoints",
-            "secure": False,
-        },
-    )
-    print(f"MinIO backend enabled: {minio_endpoint}")
-else:
-    backend = get_backend("local", {"root": "./checkpoints/pendulum"})
-
-# ---------------------------------------------------------------------------
-# 5. AutoCheckpoint — independent of callbacks, full control in the loop
-# ---------------------------------------------------------------------------
-ckpt_manager = CheckpointManager(backend=backend, upload_async=True, upload_retries=3)
-auto = AutoCheckpoint(
-    ckpt_manager,
-    freq=20,
-    local_dir="./checkpoints/pendulum",
-)
-
-# ---------------------------------------------------------------------------
-# 6. Configure SAC — reporters wired automatically, no callback checkpointing
+# 3. Configure SAC
 # ---------------------------------------------------------------------------
 config = (
     CustomSACConfig()
@@ -99,34 +70,24 @@ config = (
         target_update_interval=1,
     )
     .env_runners(num_env_runners=1, rollout_fragment_length=1)
+    .evaluation(evaluation_interval=20)
     .checkpointing(freq=20, local_dir="./checkpoints/pendulum")
+    .storage(upload_async=True, best_upload_freq=10)
     .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 # ---------------------------------------------------------------------------
-# 7. Train
+# 4. Train — no manual checkpoint logic needed
 # ---------------------------------------------------------------------------
 algo = config.build()
 
-best_reward = float("-inf")
 for iteration in range(200):
     result = algo.train()
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     print(f"[iter {iteration:03d}] mean_reward={mean_reward:.2f}")
-
-    # Periodic checkpoint — explicit and visible in the loop
-    auto.step(algo, iteration=iteration, metrics=result)
-
-    # Save best checkpoint
-    if mean_reward > best_reward:
-        best_reward = mean_reward
-        ckpt_path = algo.save_to_path("./checkpoints/pendulum/best")
-        ckpt_manager.upload(ckpt_path, "pendulum/best.tar")
-        print(f"  -> new best checkpoint: {mean_reward:.2f}")
-
-# Wait for any pending uploads
-ckpt_manager.shutdown()
+    # Periodic checkpointing + eval-driven best-model saving happen automatically
+    # inside FrameworkCallback.
 
 algo.stop()
 ray.shutdown()
-print(f"Done. Best reward: {best_reward:.2f}")
+print("Done. Metrics written to ./logs/pendulum_metrics.jsonl")

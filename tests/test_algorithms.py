@@ -111,7 +111,11 @@ class TestAlgorithmConfigs:
     def test_checkpointing_upload_async_is_passed_to_manager(self):
         from rlframework.algorithms.ppo import CustomPPOConfig
 
-        cfg = CustomPPOConfig().checkpointing(freq=5, upload_async=False)
+        cfg = (
+            CustomPPOConfig()
+            .storage(upload_async=False)
+            .framework_checkpointing(freq=5)
+        )
         manager = cfg.build_checkpoint_manager()
         try:
             assert manager._upload_async is False
@@ -122,7 +126,11 @@ class TestAlgorithmConfigs:
         from rlframework.algorithms.ppo import CustomPPOConfig
         from rlframework.logging.callbacks import FrameworkCallback
 
-        cfg = CustomPPOConfig().checkpointing(freq=10, local_dir="/tmp/ckpts")
+        cfg = (
+            CustomPPOConfig()
+            .storage()
+            .framework_checkpointing(freq=10, local_dir="/tmp/ckpts")
+        )
         cfg._apply_framework_runtime_config()
 
         callback = cfg.callbacks_class()
@@ -144,7 +152,7 @@ class TestAlgorithmConfigs:
         user_manager = MagicMock()
         cfg = (
             CustomPPOConfig()
-            .checkpointing(freq=5, local_dir="/tmp/c")
+            .framework_checkpointing(freq=5, local_dir="/tmp/c")
             .callbacks(
                 FrameworkCallback.with_reporters(
                     [],

@@ -15,7 +15,6 @@ import ray
 
 from rlframework.algorithms.ppo import CustomPPO, CustomPPOConfig
 from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.callbacks import FrameworkCallback
 from rlframework.logging.reporters import FileReporter
 from ray.rllib.utils.typing import ResultDict
 
@@ -71,7 +70,7 @@ config = (
     .environment("CartPole-v1")
     .training(lr=3e-4, train_batch_size=2000)
     .env_runners(num_env_runners=2)
-    .callbacks(lambda: FrameworkCallback.with_reporters(reporters))
+    .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 algo = config.build()
