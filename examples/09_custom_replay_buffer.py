@@ -14,8 +14,8 @@ Run:
 import ray
 
 from rlframework.algorithms.sac import CustomSACConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import FileReporter
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import FileReporter
 from rlframework.utils.replay_buffers import PrioritizedSumTreeBuffer
 
 # ===========================================================================

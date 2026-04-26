@@ -99,7 +99,7 @@ Environment variables:
 ### Add a reporter at any time
 
 ```python
-from rlframework.logging.reporters import InfluxDBReporter, FileReporter
+from rlframework.observability.reporters import InfluxDBReporter, FileReporter
 
 reporters = [
     FileReporter("./logs/metrics.jsonl"),

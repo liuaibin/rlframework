@@ -34,7 +34,7 @@ from typing import Any
 from ray.rllib.callbacks.callbacks import RLlibCallback
 
 from rlframework.config import validators
-from rlframework.logging.callbacks import FrameworkCallback
+from rlframework.callbacks import FrameworkCallback
 
 
 class FrameworkConfigMixin:
@@ -169,7 +169,7 @@ class FrameworkConfigMixin:
 
     def build_reporters(self) -> list:
         """Instantiate and return the configured reporter objects."""
-        from rlframework.logging.reporters import (
+        from rlframework.observability.reporters import (
             FileReporter,
             InfluxDBReporter,
             PrometheusReporter,

@@ -40,8 +40,8 @@ import os
 import ray
 
 from rlframework.algorithms.sac import CustomSACConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import (
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import (
     FileReporter,
     InfluxDBReporter,
     PrometheusReporter,

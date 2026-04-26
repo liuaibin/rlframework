@@ -14,8 +14,8 @@ from typing import Any
 import ray
 
 from rlframework.algorithms.ppo import CustomPPO, CustomPPOConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import FileReporter
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import FileReporter
 from ray.rllib.utils.typing import ResultDict
 
 # ---------------------------------------------------------------------------

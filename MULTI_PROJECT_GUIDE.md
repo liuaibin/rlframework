@@ -286,7 +286,7 @@ import os
 import ray
 from project_a.envs.robot_env import RobotArmEnv
 from project_a.algorithms.robot_ppo import RobotPPO
-from rlframework.logging.reporters import FileReporter
+from rlframework.observability.reporters import FileReporter
 from rlframework.storage.checkpoint_manager import CheckpointManager
 
 
@@ -434,7 +434,7 @@ import os
 import ray
 from project_b.envs.trading_env import TradingEnv
 from project_b.algorithms.trading_sac import TradingSAC
-from rlframework.logging.reporters import FileReporter
+from rlframework.observability.reporters import FileReporter
 from rlframework.storage.checkpoint_manager import CheckpointManager
 
 

@@ -11,7 +11,7 @@ import pytest
 
 class TestFileReporter:
     def test_report_writes_json_line(self, tmp_dir):
-        from rlframework.logging.reporters import FileReporter
+        from rlframework.observability.reporters import FileReporter
 
         path = tmp_dir / "metrics.jsonl"
         reporter = FileReporter(filepath=str(path))
@@ -25,7 +25,7 @@ class TestFileReporter:
         assert record["iteration"] == 1
 
     def test_report_appends_multiple_lines(self, tmp_dir):
-        from rlframework.logging.reporters import FileReporter
+        from rlframework.observability.reporters import FileReporter
 
         path = tmp_dir / "metrics.jsonl"
         reporter = FileReporter(filepath=str(path))
@@ -37,7 +37,7 @@ class TestFileReporter:
         assert len(lines) == 5
 
     def test_flush_every(self, tmp_dir):
-        from rlframework.logging.reporters import FileReporter
+        from rlframework.observability.reporters import FileReporter
 
         path = tmp_dir / "metrics.jsonl"
         reporter = FileReporter(filepath=str(path), flush_every=2)
@@ -49,7 +49,7 @@ class TestFileReporter:
         reporter.close()
 
     def test_creates_parent_dirs(self, tmp_dir):
-        from rlframework.logging.reporters import FileReporter
+        from rlframework.observability.reporters import FileReporter
 
         path = tmp_dir / "deep" / "nested" / "metrics.jsonl"
         reporter = FileReporter(filepath=str(path))
@@ -64,7 +64,7 @@ class TestFileReporter:
 
 class TestInfluxDBReporter:
     def test_report_sends_post_request(self, sample_metrics):
-        from rlframework.logging.reporters import InfluxDBReporter
+        from rlframework.observability.reporters import InfluxDBReporter
 
         with patch("requests.post") as mock_post:
             mock_post.return_value = MagicMock(status_code=204)
@@ -79,7 +79,7 @@ class TestInfluxDBReporter:
             mock_post.assert_called_once()
 
     def test_report_failure_does_not_raise(self, sample_metrics):
-        from rlframework.logging.reporters import InfluxDBReporter
+        from rlframework.observability.reporters import InfluxDBReporter
 
         with patch("requests.Session.post") as mock_post:
             mock_post.side_effect = ConnectionError("refused")
@@ -100,7 +100,7 @@ class TestInfluxDBReporter:
 
 class TestFrameworkCallback:
     def test_extract_metrics_flattens_dict(self, sample_metrics):
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         cb = FrameworkCallback.with_reporters([])()
         flat = cb._extract_metrics(sample_metrics)
@@ -112,14 +112,14 @@ class TestFrameworkCallback:
         assert flat["num_episodes"] == 10
 
     def test_with_reporters_accepts_empty_list(self):
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         cb_factory = FrameworkCallback.with_reporters([])
         cb = cb_factory()
         assert cb is not None
 
     def test_reporters_receive_metrics(self, sample_metrics):
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         reporter = MagicMock()
         cb = FrameworkCallback.with_reporters([reporter])()
@@ -136,7 +136,7 @@ class TestFrameworkCallback:
         assert iteration_arg == 5
 
     def test_extract_eval_metrics_keeps_custom_numeric_metrics(self):
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         cb = FrameworkCallback.with_reporters([])()
         eval_metrics = {

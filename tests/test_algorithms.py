@@ -76,7 +76,7 @@ class TestAlgorithmConfigs:
 
     def test_metrics_auto_wires_framework_callback_factory(self, tmp_dir):
         from rlframework.algorithms.ppo import CustomPPOConfig
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         metrics_file = tmp_dir / "metrics.jsonl"
         cfg = CustomPPOConfig().metrics(
@@ -124,7 +124,7 @@ class TestAlgorithmConfigs:
 
     def test_checkpointing_auto_wires_callback_with_manager(self):
         from rlframework.algorithms.ppo import CustomPPOConfig
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         cfg = (
             CustomPPOConfig()
@@ -147,7 +147,7 @@ class TestAlgorithmConfigs:
         from unittest.mock import MagicMock
 
         from rlframework.algorithms.ppo import CustomPPOConfig
-        from rlframework.logging.callbacks import FrameworkCallback
+        from rlframework.callbacks import FrameworkCallback
 
         user_manager = MagicMock()
         cfg = (

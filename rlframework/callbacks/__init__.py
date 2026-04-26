@@ -1,8 +1,3 @@
-"""Backward-compatible callback import path.
-
-Prefer importing from ``rlframework.callbacks``.
-"""
-
 from rlframework.callbacks.framework_callback import FrameworkCallback
 
 __all__ = ["FrameworkCallback"]

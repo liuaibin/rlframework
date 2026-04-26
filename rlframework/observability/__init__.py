@@ -1,8 +1,3 @@
-"""Backward-compatible reporter import path.
-
-Prefer importing from ``rlframework.observability.reporters``.
-"""
-
 from rlframework.observability.reporters import (
     BaseReporter,
     FileReporter,

@@ -236,8 +236,8 @@ from pathlib import Path
 
 # ✅ 导入 rlframework（从 PyPI 安装）
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import FileReporter
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import FileReporter
 from rlframework.storage.checkpoint_manager import CheckpointManager
 
 # 导入项目特定的模块
@@ -389,7 +389,7 @@ import ray
 
 # ✅ 导入 rlframework（从 PyPI 安装）
 from rlframework.algorithms.sac import CustomSACConfig
-from rlframework.logging.reporters import FileReporter
+from rlframework.observability.reporters import FileReporter
 from rlframework.storage.checkpoint_manager import CheckpointManager
 
 # 导入项目特定的模块

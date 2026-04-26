@@ -12,8 +12,8 @@ Run:
 
 import ray
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import FileReporter
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import FileReporter
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray

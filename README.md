@@ -119,8 +119,11 @@ rlframework/
 │   ├── wrappers/           # 自定义环境包装器
 │   └── __init__.py
 │
-├── logging/                # 日志和报告系统
-│   ├── callbacks.py        # 训练回调
+├── callbacks/              # 训练回调
+│   ├── framework_callback.py
+│   └── __init__.py
+│
+├── observability/          # 指标上报与观测
 │   ├── reporters/          # 各种报告器后端
 │   └── __init__.py
 │
@@ -181,8 +184,8 @@ rlframework/
 
 ```python
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.logging.callbacks import FrameworkCallback
-from rlframework.logging.reporters import FileReporter
+from rlframework.callbacks import FrameworkCallback
+from rlframework.observability.reporters import FileReporter
 
 class SuccessRateCallback(FrameworkCallback):
     def on_episode_end(self, *, episode, metrics_logger=None, **kwargs):
@@ -359,7 +362,7 @@ ckpt_mgr = CheckpointManager(
 **完整示例：** [`examples/12_grafana_metrics.py`](examples/12_grafana_metrics.py)
 
 ```python
-from rlframework.logging.reporters import (
+from rlframework.observability.reporters import (
     FileReporter,
     InfluxDBReporter,
     PrometheusReporter,
@@ -409,11 +412,11 @@ class MyPPO(CustomPPO):
 config = CustomPPOConfig(algo_class=MyPPO).environment("CartPole-v1")
 ```
 
-### 2. 日志和报告 (logging)
+### 2. 观测与指标上报 (observability)
 
 #### 文件报告器
 ```python
-from rlframework.logging.reporters import FileReporter
+from rlframework.observability.reporters import FileReporter
 
 reporter = FileReporter("metrics.jsonl")
 reporter.report({"episode_return_mean": 123.4}, iteration=1)
@@ -421,7 +424,7 @@ reporter.report({"episode_return_mean": 123.4}, iteration=1)
 
 #### InfluxDB 报告器（需要安装 influxdb）
 ```python
-from rlframework.logging.reporters import InfluxDBReporter
+from rlframework.observability.reporters import InfluxDBReporter
 
 reporter = InfluxDBReporter(
     url="http://localhost:8086",
@@ -435,7 +438,7 @@ reporter.report({"episode_return_mean": 123.4}, iteration=1)
 
 #### Prometheus 报告器（需要安装 prometheus-client）
 ```python
-from rlframework.logging.reporters import PrometheusReporter
+from rlframework.observability.reporters import PrometheusReporter
 
 reporter = PrometheusReporter(gateway="http://localhost:9091", job="rl_training")
 reporter.report({"episode_return_mean": 123.4}, iteration=1)
