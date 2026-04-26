@@ -27,9 +27,13 @@ to be enabled.  See ``examples/`` for a concrete usage pattern.
 import logging
 import os
 from functools import partial
+from typing import Any
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS, EPISODE_RETURN_MEAN
+
+from rlframework.observability.reporters import BaseReporter
+from rlframework.storage import CheckpointManager
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +73,14 @@ class FrameworkCallback(RLlibCallback):
 
     def __init__(
         self,
-        reporters: list | None = None,
+        reporters: list[BaseReporter] | None = None,
         collect_resource_stats: bool = False,
-        checkpoint_manager=None,
+        checkpoint_manager: CheckpointManager | None = None,
         checkpoint_freq: int = 0,
         checkpoint_local_dir: str = "./checkpoints",
         best_local_dir: str | None = None,
         best_upload_freq: int = 1,
-    ):
+    ) -> None:
         super().__init__()
         self._reporters = reporters or []
         self._collect_resource = collect_resource_stats
@@ -90,51 +94,56 @@ class FrameworkCallback(RLlibCallback):
         self._best_upload_freq = max(0, best_upload_freq)
         self._best_improvement_count = 0
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_reporters"] = []  # exclude reporters on serialization
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
 
     @classmethod
-    def with_reporters(cls, reporters: list, **kwargs):
+    def with_reporters(cls, reporters: list[BaseReporter], **kwargs: Any) -> Any:
         """Return a callback factory compatible with ``config.callbacks(...)``."""
         return partial(cls, reporters=reporters, **kwargs)
 
     def on_episode_end(
         self,
         *,
-        episode,
-        env_runner=None,
-        metrics_logger=None,
-        env=None,
+        episode: Any,
+        env_runner: Any = None,
+        metrics_logger: Any = None,
+        env: Any = None,
         env_index: int = 0,
-        rl_module=None,
-        **kwargs,
+        rl_module: Any = None,
+        **kwargs: Any,
     ) -> None:
         """Hook reserved for future per-episode metric injection."""
         pass
 
     def on_train_result(
-        self, *, result: dict, algorithm=None, metrics_logger=None, **kwargs
+        self,
+        *,
+        result: dict[str, Any],
+        algorithm: Any = None,
+        metrics_logger: Any = None,
+        **kwargs: Any,
     ) -> None:
         metrics = self._extract_metrics(result)
         metrics["phase"] = "train"
         if self._collect_resource:
             metrics.update(self._resource_stats())
-        iteration = result.get("training_iteration", 0)
+        iteration = int(result.get("training_iteration", 0))
         self._fan_out(metrics, iteration=iteration, phase="train")
         self._save_periodic_checkpoint(algorithm, iteration)
 
     def on_evaluate_end(
         self,
         *,
-        algorithm=None,
-        metrics_logger=None,
-        evaluation_metrics: dict,
-        **kwargs,
+        algorithm: Any = None,
+        metrics_logger: Any = None,
+        evaluation_metrics: dict[str, Any],
+        **kwargs: Any,
     ) -> None:
         """Report evaluation metrics and update the best model if improved."""
         metrics = self._extract_eval_metrics(evaluation_metrics)
@@ -144,7 +153,7 @@ class FrameworkCallback(RLlibCallback):
         self._fan_out(metrics, iteration=iteration, phase="eval")
         self._update_best_model_if_improved(algorithm, metrics, iteration)
 
-    def _fan_out(self, metrics: dict, *, iteration: int, phase: str) -> None:
+    def _fan_out(self, metrics: dict[str, Any], *, iteration: int, phase: str) -> None:
         """Send *metrics* to every registered reporter."""
         for reporter in self._reporters:
             try:
@@ -152,8 +161,10 @@ class FrameworkCallback(RLlibCallback):
             except Exception as exc:
                 logger.warning("Reporter %s failed: %s", reporter, exc)
 
-    def _save_periodic_checkpoint(self, algorithm, iteration: int) -> None:
+    def _save_periodic_checkpoint(self, algorithm: Any, iteration: int) -> None:
         """Save a periodic checkpoint if *iteration* hits configured frequency."""
+        if algorithm is None:
+            return
         if self._ckpt_freq <= 0:
             return
         if iteration % self._ckpt_freq != 0:
@@ -164,9 +175,16 @@ class FrameworkCallback(RLlibCallback):
         saved_path = algorithm.save_to_path(ckpt_path)
         logger.info("Periodic checkpoint saved: %s", saved_path)
 
-    def _update_best_model_if_improved(self, algorithm, eval_metrics: dict, iteration: int) -> None:
+    def _update_best_model_if_improved(
+        self, algorithm: Any, eval_metrics: dict[str, Any], iteration: int
+    ) -> None:
         """Save and optionally upload the current model if eval reward improves."""
-        eval_return = eval_metrics.get("eval/episode_return_mean", float("-inf"))
+        if algorithm is None:
+            return
+        raw_eval_return = eval_metrics.get("eval/episode_return_mean", float("-inf"))
+        eval_return = (
+            float(raw_eval_return) if isinstance(raw_eval_return, (int, float)) else float("-inf")
+        )
         if eval_return <= self._best_reward:
             return
         self._best_reward = eval_return
@@ -189,9 +207,9 @@ class FrameworkCallback(RLlibCallback):
                 )
 
     @staticmethod
-    def _extract_metrics(result: dict) -> dict:
+    def _extract_metrics(result: dict[str, Any]) -> dict[str, Any]:
         """Flatten the most relevant keys from the training result dict."""
-        flat: dict = {}
+        flat: dict[str, Any] = {}
         flat["training_iteration"] = result.get("training_iteration", 0)
         flat["time_total_s"] = result.get("time_total_s", 0.0)
 
@@ -231,9 +249,9 @@ class FrameworkCallback(RLlibCallback):
         return flat
 
     @staticmethod
-    def _extract_eval_metrics(evaluation_metrics: dict) -> dict:
+    def _extract_eval_metrics(evaluation_metrics: dict[str, Any]) -> dict[str, Any]:
         """Flatten evaluation-specific result dict with ``eval/`` prefix."""
-        flat: dict = {}
+        flat: dict[str, Any] = {}
 
         env_runners = evaluation_metrics.get(ENV_RUNNER_RESULTS, {})
         flat["eval/episode_return_mean"] = env_runners.get(EPISODE_RETURN_MEAN, 0.0)
@@ -254,7 +272,7 @@ class FrameworkCallback(RLlibCallback):
         return flat
 
     @staticmethod
-    def _resource_stats() -> dict:
+    def _resource_stats() -> dict[str, float]:
         try:
             import psutil
 

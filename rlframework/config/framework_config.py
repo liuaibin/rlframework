@@ -29,12 +29,14 @@ Alternatively, use the algorithm-specific configs (:class:`CustomPPOConfig`,
 """
 
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 
 from rlframework.callbacks import FrameworkCallback
 from rlframework.config import validators
+from rlframework.observability.reporters import BaseReporter
+from rlframework.storage import CheckpointManager
 
 
 class FrameworkConfigMixin:
@@ -45,7 +47,7 @@ class FrameworkConfigMixin:
     Subclasses must call ``_init_framework_mixin()`` in their ``__init__``.
     """
 
-    def _init_framework_mixin(self):
+    def _init_framework_mixin(self) -> None:
         """Initialize framework-specific attributes.
 
         Call this in the subclass's __init__ after super().__init__().
@@ -57,7 +59,7 @@ class FrameworkConfigMixin:
 
         # --- metrics section ---
         self._metrics_reporters: list[str] = []
-        self._metrics_reporter_configs: dict[str, dict] = {}
+        self._metrics_reporter_configs: dict[str, dict[str, Any]] = {}
 
         # --- checkpointing section ---
         self._checkpoint_freq: int = 0  # 0 = manual only
@@ -90,7 +92,7 @@ class FrameworkConfigMixin:
         backend: str = "local",
         upload_async: bool = True,
         best_upload_freq: int = 1,
-        **backend_kwargs,
+        **backend_kwargs: Any,
     ) -> "FrameworkConfigMixin":
         """Configure the storage backend (chain-friendly).
 
@@ -119,7 +121,7 @@ class FrameworkConfigMixin:
     def metrics(
         self,
         reporters: list[str] | None = None,
-        reporter_configs: dict[str, dict] | None = None,
+        reporter_configs: dict[str, dict[str, Any]] | None = None,
     ) -> "FrameworkConfigMixin":
         """Configure metric reporters.
 
@@ -168,7 +170,7 @@ class FrameworkConfigMixin:
     # Helper: build reporters from config
     # ------------------------------------------------------------------
 
-    def build_reporters(self) -> list:
+    def build_reporters(self) -> list[BaseReporter]:
         """Instantiate and return the configured reporter objects."""
         from rlframework.observability.reporters import (
             FileReporter,
@@ -176,7 +178,7 @@ class FrameworkConfigMixin:
             PrometheusReporter,
         )
 
-        built = []
+        built: list[BaseReporter] = []
         for name in self._metrics_reporters:
             cfg = self._metrics_reporter_configs.get(name, {})
             if name == "file":
@@ -193,7 +195,7 @@ class FrameworkConfigMixin:
     # Helper: build storage backend from config
     # ------------------------------------------------------------------
 
-    def build_checkpoint_manager(self):
+    def build_checkpoint_manager(self) -> CheckpointManager | None:
         """Instantiate and return a :class:`~rlframework.storage.CheckpointManager`.
 
         Returns:
@@ -202,15 +204,13 @@ class FrameworkConfigMixin:
         """
         if not self._storage_configured:
             return None
-        from rlframework.storage import CheckpointManager
-
         return CheckpointManager(
             backend=self._storage_backend,
             backend_config=self._storage_backend_config,
             upload_async=self._storage_upload_async,
         )
 
-    def _apply_framework_runtime_config(self):
+    def _apply_framework_runtime_config(self) -> None:
         """Wire up runtime objects after all config has been set.
 
         This method is called by the algorithm's ``setup()`` method.
@@ -228,7 +228,7 @@ class FrameworkConfigMixin:
         if existing is RLlibCallback:
             # No custom callback — wire everything into a fresh FrameworkCallback.
             best_local_dir = self._checkpoint_local_dir + "/best"
-            self.callbacks(
+            cast(Any, self).callbacks(
                 FrameworkCallback.with_reporters(
                     reporters,
                     checkpoint_manager=ckpt_mgr,
@@ -243,8 +243,8 @@ class FrameworkConfigMixin:
             # inject checkpointing config.  Only inject checkpoint_manager if we
             # actually built one; preserve the user's checkpoint_manager if any.
             best_local_dir = self._checkpoint_local_dir + "/best"
-            merged_kwargs = dict(
-                existing.keywords,
+            merged_kwargs: dict[str, Any] = dict(
+                existing.keywords or {},
                 checkpoint_freq=self._checkpoint_freq,
                 checkpoint_local_dir=self._checkpoint_local_dir,
                 best_local_dir=best_local_dir,
@@ -253,4 +253,6 @@ class FrameworkConfigMixin:
             if ckpt_mgr is not None:
                 merged_kwargs["checkpoint_manager"] = ckpt_mgr
             user_reporters = merged_kwargs.pop("reporters")
-            self.callbacks(FrameworkCallback.with_reporters(user_reporters, **merged_kwargs))
+            cast(Any, self).callbacks(
+                FrameworkCallback.with_reporters(user_reporters, **merged_kwargs)
+            )

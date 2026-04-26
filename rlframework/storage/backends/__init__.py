@@ -24,6 +24,7 @@ Use :func:`get_backend` to instantiate a backend by name::
 import os
 import shutil
 from abc import ABC, abstractmethod
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Base
@@ -54,7 +55,7 @@ class LocalBackend(BaseBackend):
         root: Destination root directory.  Created if absent.
     """
 
-    def __init__(self, root: str = "./checkpoints"):
+    def __init__(self, root: str = "./checkpoints") -> None:
         self._root = root
         os.makedirs(root, exist_ok=True)
 
@@ -103,13 +104,13 @@ class MinIOBackend(BaseBackend):
         secret_key: str = "",
         bucket: str = "rl-checkpoints",
         secure: bool = False,
-    ):
+    ) -> None:
         import os as _os
 
         _ak = access_key or _os.getenv("MINIO_ACCESS_KEY", "")
         _sk = secret_key or _os.getenv("MINIO_SECRET_KEY", "")
         try:
-            from minio import Minio  # type: ignore
+            from minio import Minio
 
             self._client = Minio(endpoint, access_key=_ak, secret_key=_sk, secure=secure)
             if not self._client.bucket_exists(bucket):
@@ -151,11 +152,11 @@ class S3Backend(BaseBackend):
         bucket: str,
         prefix: str = "",
         region_name: str = "",
-    ):
+    ) -> None:
         try:
-            import boto3  # type: ignore
+            import boto3
 
-            kwargs = {}
+            kwargs: dict[str, Any] = {}
             if region_name:
                 kwargs["region_name"] = region_name
             self._s3 = boto3.client("s3", **kwargs)
@@ -191,7 +192,7 @@ _BACKEND_REGISTRY: dict[str, type[BaseBackend]] = {
 }
 
 
-def get_backend(name: str, config: dict) -> BaseBackend:
+def get_backend(name: str, config: dict[str, Any]) -> BaseBackend:
     """Instantiate a backend by name.
 
     Args:

@@ -12,6 +12,8 @@ customise PPO behaviour inside rlframework::
             return result
 """
 
+from typing import Any, cast
+
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.utils.annotations import override
@@ -46,13 +48,13 @@ class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
         algo = config.build()
     """
 
-    def __init__(self, algo_class=None):
+    def __init__(self, algo_class: type[Any] | None = None) -> None:
         super().__init__(algo_class=algo_class or CustomPPO)
         # Initialize the framework mixin
         self._init_framework_mixin()
 
     @override(PPOConfig)
-    def build(self, *args, **kwargs):
+    def build(self, *args: Any, **kwargs: Any) -> Any:
         self._apply_framework_runtime_config()
         return super().build(*args, **kwargs)
 
@@ -132,22 +134,25 @@ class CustomPPO(FrameworkAlgorithmMixin, PPO):
         return CustomPPOConfig()
 
     @override(PPO)
-    def setup(self, config: CustomPPOConfig):
+    def setup(self, config: CustomPPOConfig) -> None:
         super().setup(config)
 
     @override(PPO)
     def training_step(self) -> None:
         self.on_before_training_step()
         super().training_step()
-        result = self.metrics.peek()
+        metrics = self.metrics
+        if metrics is None:
+            return
+        result = metrics.peek()
         result = self.on_after_training_step(result)
         if result:
             for key, value in result.items():
                 if isinstance(value, (int, float)):
-                    if key in self.metrics:
-                        self.metrics.log_value(key, value)
+                    if key in metrics:
+                        metrics.log_value(key, value)
                     else:
-                        self.metrics.log_value(key, value, window=1)
+                        metrics.log_value(key, value, window=1)
 
 
 class CustomReplayBufferPPO(CustomPPO):
@@ -158,6 +163,6 @@ class CustomReplayBufferPPO(CustomPPO):
     ``training_step``; untouched hooks are no-ops.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.local_replay_buffer = ReservoirReplayBuffer(capacity=1000)
+        self.local_replay_buffer = cast(Any, ReservoirReplayBuffer(capacity=1000))

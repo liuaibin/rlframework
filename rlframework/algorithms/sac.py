@@ -26,7 +26,7 @@ from rlframework.models.catalog import (
 )
 
 
-def _resolve_replay_buffer_type(buffer_type: Any) -> type | None:
+def _resolve_replay_buffer_type(buffer_type: Any) -> type[Any] | None:
     """Resolve replay buffer type from class object or import-path string."""
     if isinstance(buffer_type, type):
         return buffer_type
@@ -61,12 +61,12 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
         algo = config.build()
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(algo_class=CustomSAC)
         # Initialize the framework mixin
         self._init_framework_mixin()
 
-    def checkpointing(
+    def checkpointing(  # type: ignore[override]
         self,
         freq: int = 0,
         local_dir: str = "./checkpoints",
@@ -76,7 +76,7 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
         return self
 
     @override(SACConfig)
-    def build(self, *args, **kwargs):
+    def build(self, *args: Any, **kwargs: Any) -> Any:
         self._apply_framework_runtime_config()
         return super().build(*args, **kwargs)
 
@@ -186,11 +186,11 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
         return CustomSACConfig()
 
     @override(SAC)
-    def setup(self, config: CustomSACConfig):
+    def setup(self, config: CustomSACConfig) -> None:
         super().setup(config)
 
     @override(SAC)
-    def _create_local_replay_buffer_if_necessary(self, config):
+    def _create_local_replay_buffer_if_necessary(self, config: Any) -> Any:
         # The parent Algorithm._create_local_replay_buffer_if_necessary() has a
         # broken "in" check (line ~4066) that crashes when replay_buffer_config["type"]
         # is a class rather than a string.  We replicate the parent's logic but
@@ -218,7 +218,7 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
                 return issubclass(t, EpisodeReplayBuffer)
             return False
 
-        if _is_episode_buffer(buffer_type):
+        if _is_episode_buffer(buffer_type) and self.config is not None:
             config["replay_buffer_config"]["metrics_num_episodes_for_smoothing"] = (
                 self.config.metrics_num_episodes_for_smoothing
             )
@@ -233,12 +233,15 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
     def training_step(self) -> None:
         self.on_before_training_step()
         super().training_step()
-        result = self.metrics.peek()
+        metrics = self.metrics
+        if metrics is None:
+            return
+        result = metrics.peek()
         result = self.on_after_training_step(result)
         if result:
             for key, value in result.items():
                 if isinstance(value, (int, float)):
-                    if key in self.metrics:
-                        self.metrics.log_value(key, value)
+                    if key in metrics:
+                        metrics.log_value(key, value)
                     else:
-                        self.metrics.log_value(key, value, window=1)
+                        metrics.log_value(key, value, window=1)

@@ -27,10 +27,11 @@ Then register with RLlib::
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, cast
 
 import gymnasium as gym
 import numpy as np
+from gymnasium.core import RenderFrame
 
 
 class BaseEnv(gym.Env):
@@ -46,7 +47,7 @@ class BaseEnv(gym.Env):
         kwargs: Forwarded to the Gymnasium Env init.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {
+    metadata: dict[str, Any] = {  # noqa: RUF012 - Gymnasium expects class-level metadata.
         "render_modes": ["human", "rgb_array"],
         "render_fps": 30,
     }
@@ -57,7 +58,7 @@ class BaseEnv(gym.Env):
         action_space: gym.Space,
         max_episode_steps: int | None = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         super().__init__()
         self.observation_space = observation_space
         self.action_space = action_space
@@ -75,14 +76,14 @@ class BaseEnv(gym.Env):
         self,
         *,
         seed: int | None = None,
-        options: dict | None = None,
-    ) -> tuple[np.ndarray, dict]:
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         self._elapsed_steps = 0
         obs, info = self._reset(seed=seed, options=options)
         return np.asarray(obs, dtype=self.observation_space.dtype), info
 
-    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
+    def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         self._elapsed_steps += 1
         obs, reward, terminated, truncated, info = self._step(action)
 
@@ -99,7 +100,7 @@ class BaseEnv(gym.Env):
         )
 
     def seed(self, seed: int | None = None) -> list[int]:
-        return [seed]
+        return [] if seed is None else [seed]
 
     def close(self) -> None:
         try:
@@ -111,9 +112,9 @@ class BaseEnv(gym.Env):
         self._window = None
         super().close()
 
-    def render(self) -> np.ndarray | None:
+    def render(self) -> RenderFrame | list[RenderFrame] | None:
         if self.render_mode == "rgb_array":
-            return self._render_rgb_array()
+            return cast(RenderFrame | None, self._render_rgb_array())
         if self.render_mode == "human":
             self._render_human()
         return None
@@ -125,8 +126,8 @@ class BaseEnv(gym.Env):
     def _reset(
         self,
         seed: int | None,
-        options: dict | None,
-    ) -> tuple[np.ndarray | dict, dict]:
+        options: dict[str, Any] | None,
+    ) -> tuple[np.ndarray | dict[str, Any], dict[str, Any]]:
         """Reset the environment.
 
         Args:
@@ -138,7 +139,9 @@ class BaseEnv(gym.Env):
         """
         raise NotImplementedError
 
-    def _step(self, action) -> tuple[np.ndarray | dict, float, bool, bool, dict]:
+    def _step(
+        self, action: Any
+    ) -> tuple[np.ndarray | dict[str, Any], float, bool, bool, dict[str, Any]]:
         """Apply one step.
 
         Args:

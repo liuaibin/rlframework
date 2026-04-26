@@ -37,17 +37,15 @@ Available RLModules:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeAlias, cast
 
 import gymnasium as gym
 from ray.rllib.core.rl_module.rl_module import RLModule
-
-try:
-    # RLlib versions differ on whether RLModuleState is exported.
-    from ray.rllib.core.rl_module.rl_module import RLModuleState
-except ImportError:  # pragma: no cover - compatibility fallback
-    RLModuleState = dict[str, Any]
 from ray.rllib.utils.annotations import override
+
+# RLlib versions differ on whether RLModuleState is exported; a plain mapping
+# matches what the custom modules serialize here.
+RLModuleState: TypeAlias = dict[str, Any]
 
 # ----------------------------------------------------------------------
 # Base class for custom RLModules
@@ -80,7 +78,7 @@ class CustomTorchRLModule(RLModule):
         return {}
 
     @override(RLModule)
-    def _forward(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
+    def _forward(self, batch: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         """Generic forward pass used in all phases.
 
         Override for custom forward behavior that should be shared
@@ -89,7 +87,7 @@ class CustomTorchRLModule(RLModule):
         raise NotImplementedError
 
     @override(RLModule)
-    def _forward_inference(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
+    def _forward_inference(self, batch: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         """Forward pass during inference (evaluation, greedy acting).
 
         Override when inference behavior differs from exploration/training.
@@ -98,7 +96,7 @@ class CustomTorchRLModule(RLModule):
         return self._forward(batch, **kwargs)
 
     @override(RLModule)
-    def _forward_exploration(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
+    def _forward_exploration(self, batch: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         """Forward pass during exploration (action sampling).
 
         Override to add exploration noise or stochasticity.
@@ -107,7 +105,7 @@ class CustomTorchRLModule(RLModule):
         return self._forward(batch, **kwargs)
 
     @override(RLModule)
-    def _forward_train(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
+    def _forward_train(self, batch: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         """Forward pass during training (computing loss inputs).
 
         Override to compute extra outputs needed for loss computation.
@@ -122,7 +120,7 @@ class CustomTorchRLModule(RLModule):
         Override if you need custom state serialization
         (e.g., excluding optimizer state).
         """
-        return {"module_state": self.state_dict()}
+        return {"module_state": cast(Any, self).state_dict()}
 
     @override(RLModule)
     def set_state(self, state: RLModuleState) -> None:
@@ -130,7 +128,7 @@ class CustomTorchRLModule(RLModule):
 
         Override if you need custom state deserialization.
         """
-        self.load_state_dict(state["module_state"])
+        cast(Any, self).load_state_dict(state["module_state"])
 
 
 # ----------------------------------------------------------------------
@@ -192,7 +190,7 @@ class CustomPPORLModule(CustomTorchRLModule):
         observation_space: gym.Space,
         action_space: gym.Space,
         model_config: dict | None = None,
-    ):
+    ) -> None:
         # Store spaces before calling super().__init__ so setup() can use them
         self._observation_space = observation_space
         self._action_space = action_space
@@ -250,7 +248,7 @@ class CustomSACRLModule(CustomTorchRLModule):
         observation_space: gym.Space,
         action_space: gym.Space,
         model_config: dict | None = None,
-    ):
+    ) -> None:
         self._observation_space = observation_space
         self._action_space = action_space
         self._model_config = model_config or {}
@@ -305,7 +303,7 @@ class CustomDQNRLModule(CustomTorchRLModule):
         observation_space: gym.Space,
         action_space: gym.Space,
         model_config: dict | None = None,
-    ):
+    ) -> None:
         self._observation_space = observation_space
         self._action_space = action_space
         self._model_config = model_config or {}

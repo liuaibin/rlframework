@@ -3,7 +3,7 @@
 import json
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, TextIO
 
 
 class BaseReporter(ABC):
@@ -20,31 +20,32 @@ class BaseReporter(ABC):
 class FileReporter(BaseReporter):
     """Append one JSON line per report call."""
 
-    def __init__(self, filepath: str, flush_every: int = 1):
+    def __init__(self, filepath: str, flush_every: int = 1) -> None:
         self._filepath = filepath
         self._flush_every = flush_every
         self._write_count = 0
-        self._fh = None
+        self._fh: TextIO | None = None
 
-    def _ensure_file(self):
+    def _ensure_file(self) -> TextIO:
         if self._fh is None:
             import os
 
             os.makedirs(os.path.dirname(os.path.abspath(self._filepath)), exist_ok=True)
             self._fh = open(self._filepath, "a", encoding="utf-8")
+        return self._fh
 
     def report(self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train") -> None:
-        self._ensure_file()
+        fh = self._ensure_file()
         record = {
             "timestamp": time.time(),
             "iteration": iteration,
             "phase": phase,
             **metrics,
         }
-        self._fh.write(json.dumps(record) + "\n")
+        fh.write(json.dumps(record) + "\n")
         self._write_count += 1
         if self._write_count % self._flush_every == 0:
-            self._fh.flush()
+            fh.flush()
 
     def close(self) -> None:
         if self._fh is not None and not self._fh.closed:
@@ -52,15 +53,15 @@ class FileReporter(BaseReporter):
             self._fh.close()
             self._fh = None
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.close()
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_fh"] = None
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
 
 
@@ -75,7 +76,7 @@ class InfluxDBReporter(BaseReporter):
         token: str | None = None,
         measurement: str = "rl_training",
         timeout: float = 5.0,
-    ):
+    ) -> None:
         import os
 
         self._url = f"{url.rstrip('/')}/api/v2/write"
@@ -123,7 +124,7 @@ class PrometheusReporter(BaseReporter):
         gateway: str,
         job: str = "rl_training",
         grouping_key: dict[str, str] | None = None,
-    ):
+    ) -> None:
         self._gateway = gateway
         self._job = job
         self._grouping_key = grouping_key or {}

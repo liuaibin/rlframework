@@ -28,6 +28,7 @@ import shutil
 import time
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, cast
 
 from rlframework.storage.backends import BaseBackend, get_backend
 
@@ -52,33 +53,35 @@ class CheckpointManager:
 
     def __init__(
         self,
-        backend: "str | BaseBackend" = "local",
-        backend_config: dict | None = None,
+        backend: str | BaseBackend = "local",
+        backend_config: dict[str, Any] | None = None,
         upload_async: bool = True,
         upload_workers: int = 2,
         upload_retries: int = 3,
-    ):
+    ) -> None:
+        self._backend: BaseBackend
         if isinstance(backend, str):
             self._backend = get_backend(backend, backend_config or {})
         else:
             # Accept any duck-typed backend (BaseBackend subclass or mock)
-            self._backend: BaseBackend = backend  # type: ignore[assignment]
+            self._backend = backend
         self._upload_async = upload_async
+        self._upload_workers = upload_workers
         self._executor: ThreadPoolExecutor | None = None
         self._retries = upload_retries
 
     def _get_executor(self) -> ThreadPoolExecutor:
         """Lazily create the thread pool (avoids pickling ThreadPoolExecutor)."""
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=2)
+            self._executor = ThreadPoolExecutor(max_workers=self._upload_workers)
         return self._executor
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_executor"] = None
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
 
     # ------------------------------------------------------------------
@@ -90,7 +93,7 @@ class CheckpointManager:
         local_path: str,
         remote_name: str | None = None,
         async_mode: bool | None = None,
-    ) -> Future | str:
+    ) -> Future[str] | str:
         """Upload a checkpoint with optional per-call sync/async override.
 
         Args:
@@ -119,7 +122,7 @@ class CheckpointManager:
         if async_mode is False:
             return result
 
-        future: Future = Future()
+        future: Future[str] = Future()
         future.set_result(result)
         return future
 
@@ -135,7 +138,7 @@ class CheckpointManager:
             remote_name=remote_name,
             async_mode=False,
         )
-        return result
+        return cast(str, result)
 
     def download(self, remote_name: str, local_path: str) -> str:
         """Download *remote_name* from the backend to *local_path*.

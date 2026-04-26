@@ -67,8 +67,8 @@ class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
         alpha: float = 0.6,
         beta: float = 0.5,
         epsilon: float = 1e-5,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         # RLlib's PrioritizedEpisodeReplayBuffer uses:
         #   _sum_segment: SumSegmentTree - for proportional sampling
         #   _min_segment: MinSegmentTree - for max-weight computation
@@ -110,16 +110,16 @@ class ReservoirReplayBuffer:
         ``ray.rllib.utils.replay_buffers.reservoir_replay_buffer``.
     """
 
-    def __init__(self, capacity: int = 10000, **kwargs):
+    def __init__(self, capacity: int = 10000, **kwargs: Any) -> None:
         self.capacity = capacity
-        self._storage = []
+        self._storage: list[Any] = []
         self._num_seen = 0
-        self._hit_count = []
+        self._hit_count: list[int] = []
 
     def __len__(self) -> int:
         return len(self._storage)
 
-    def add(self, batch: Any, **kwargs) -> None:
+    def add(self, batch: Any, **kwargs: Any) -> None:
         """Add a batch using reservoir sampling."""
         import random
 
@@ -141,7 +141,7 @@ class ReservoirReplayBuffer:
                     else:
                         self._storage.append(batch[i])
 
-    def sample(self, num_items: int = 32, **kwargs) -> Any:
+    def sample(self, num_items: int = 32, **kwargs: Any) -> Any:
         """Sample uniformly from all seen samples."""
         import random
 

@@ -1,6 +1,9 @@
 """Common gymnasium wrappers."""
 
-from gymnasium import ObservationWrapper, Wrapper
+from typing import Any
+
+import numpy as np
+from gymnasium import Env, ObservationWrapper, Wrapper
 
 
 class NormalizeObsWrapper(ObservationWrapper):
@@ -11,16 +14,14 @@ class NormalizeObsWrapper(ObservationWrapper):
         epsilon: Small value to avoid division by zero.
     """
 
-    def __init__(self, env, epsilon: float = 1e-8):
+    def __init__(self, env: Env[Any, Any], epsilon: float = 1e-8) -> None:
         super().__init__(env)
         self._epsilon = epsilon
-        self._mean = None
-        self._var = None
+        self._mean: np.ndarray | None = None
+        self._var: np.ndarray | None = None
         self._count = 0
 
-    def _update_stats(self, obs):
-        import numpy as np
-
+    def _update_stats(self, obs: np.ndarray) -> None:
         obs = obs.astype(np.float64, copy=False)
         if self._mean is None:
             self._mean = obs.copy()
@@ -33,10 +34,9 @@ class NormalizeObsWrapper(ObservationWrapper):
         self._mean += delta / self._count
         self._var += delta * (obs - self._mean)
 
-    def observation(self, obs):
-        import numpy as np
-
+    def observation(self, obs: np.ndarray) -> np.ndarray:
         self._update_stats(obs)
+        assert self._mean is not None and self._var is not None
         std = np.sqrt(self._var / max(self._count, 1) + self._epsilon)
         return (obs - self._mean) / std
 
@@ -48,19 +48,19 @@ class RecordEpisodeStatsWrapper(Wrapper):
     ``episode_return``, ``episode_length``.
     """
 
-    def __init__(self, env):
+    def __init__(self, env: Env[Any, Any]) -> None:
         super().__init__(env)
         self._episode_return = 0.0
         self._episode_length = 0
 
-    def reset(self, **kwargs):
+    def reset(self, **kwargs: Any) -> Any:
         self._episode_return = 0.0
         self._episode_length = 0
         return self.env.reset(**kwargs)
 
-    def step(self, action):
+    def step(self, action: Any) -> Any:
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._episode_return += reward
+        self._episode_return += float(reward)
         self._episode_length += 1
         if terminated or truncated:
             info["episode_return"] = self._episode_return

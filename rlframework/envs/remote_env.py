@@ -29,7 +29,7 @@ Then register::
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -46,9 +46,12 @@ class RemoteEnv(gym.Env):
     in ``__init__`` (or before the first ``reset`` call).
     """
 
-    metadata: ClassVar[dict[str, Any]] = {"render_modes": [], "render_fps": 0}
+    metadata: dict[str, Any] = {  # noqa: RUF012 - Gymnasium expects class-level metadata.
+        "render_modes": [],
+        "render_fps": 0,
+    }
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._elapsed_steps = 0
         self.render_mode = None
@@ -61,14 +64,14 @@ class RemoteEnv(gym.Env):
         self,
         *,
         seed: int | None = None,
-        options: dict | None = None,
-    ) -> tuple[np.ndarray, dict]:
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         self._elapsed_steps = 0
         obs, info = self._send_reset(seed=seed, options=options)
         return np.asarray(obs, dtype=self.observation_space.dtype), info
 
-    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
+    def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         self._elapsed_steps += 1
         obs, reward, terminated, truncated, info = self._send_step(action)
         return (
@@ -90,8 +93,8 @@ class RemoteEnv(gym.Env):
     def _send_reset(
         self,
         seed: int | None,
-        options: dict | None,
-    ) -> tuple[np.ndarray | dict, dict]:
+        options: dict[str, Any] | None,
+    ) -> tuple[np.ndarray | dict[str, Any], dict[str, Any]]:
         """Send a reset request to the remote service.
 
         Args:
@@ -103,7 +106,9 @@ class RemoteEnv(gym.Env):
         """
         raise NotImplementedError
 
-    def _send_step(self, action) -> tuple[np.ndarray | dict, float, bool, bool, dict]:
+    def _send_step(
+        self, action: Any
+    ) -> tuple[np.ndarray | dict[str, Any], float, bool, bool, dict[str, Any]]:
         """Send a step request to the remote service.
 
         Args:
