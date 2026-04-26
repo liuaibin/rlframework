@@ -6,7 +6,6 @@ Demonstrates a production-grade training run with:
 - MinIO checkpoint storage with async upload
 - InfluxDB v2 metrics reporter
 - Prometheus push gateway reporter
-- Model version catalogue (ModelManager)
 - Custom resource metrics (CPU/memory via psutil)
 
 Prerequisites (docker-compose snippet):
@@ -49,7 +48,6 @@ from rlframework.logging.reporters import (
 )
 from rlframework.storage.backends import get_backend
 from rlframework.storage.checkpoint_manager import CheckpointManager
-from rlframework.storage.model_manager import ModelManager
 
 # ---------------------------------------------------------------------------
 # Configuration (override via env vars in CI/CD)
@@ -119,12 +117,7 @@ ckpt_manager = CheckpointManager(
 )
 
 # ---------------------------------------------------------------------------
-# 4. Model version registry
-# ---------------------------------------------------------------------------
-model_mgr = ModelManager(catalogue_path=f"./logs/{MODEL_NAME}_catalogue.json")
-
-# ---------------------------------------------------------------------------
-# 5. SAC config
+# 4. SAC config
 # ---------------------------------------------------------------------------
 config = (
     CustomSACConfig()
@@ -146,7 +139,7 @@ config = (
 )
 
 # ---------------------------------------------------------------------------
-# 6. Training loop
+# 5. Training loop
 # ---------------------------------------------------------------------------
 algo = config.build()
 best_reward = float("-inf")
@@ -163,15 +156,6 @@ for iteration in range(TOTAL_ITERATIONS):
         )
         remote_name = f"{EXPERIMENT_NAME}/iter_{iteration+1}.tar"
         ckpt_manager.upload(local_path, remote_name)
-
-        # Register in model catalogue
-        model_mgr.register(
-            name=MODEL_NAME,
-            version=f"iter_{iteration+1}",
-            path=remote_name,
-            metrics={"episode_return_mean": mean_reward},
-            metadata={"iteration": iteration + 1, "experiment": EXPERIMENT_NAME},
-        )
         print(f"  -> checkpoint uploaded: {remote_name}")
 
     # Track best model
@@ -179,22 +163,11 @@ for iteration in range(TOTAL_ITERATIONS):
         best_reward = mean_reward
         local_best = algo.save_to_path(f"./checkpoints/{EXPERIMENT_NAME}/best")
         ckpt_manager.upload(local_best, f"{EXPERIMENT_NAME}/best.tar")
-        model_mgr.register(
-            name=MODEL_NAME,
-            version="best",
-            path=f"{EXPERIMENT_NAME}/best.tar",
-            metrics={"episode_return_mean": best_reward},
-            metadata={"iteration": iteration + 1},
-        )
 
 # ---------------------------------------------------------------------------
-# 7. Finalize
+# 6. Finalize
 # ---------------------------------------------------------------------------
 ckpt_manager.shutdown()
-
-# Print best version info
-best_info = model_mgr.best(MODEL_NAME, metric="episode_return_mean", mode="max")
-print(f"\nBest model: {best_info}")
 
 for reporter in reporters:
     reporter.close()

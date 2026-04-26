@@ -9,8 +9,15 @@ from rlframework.models.catalog import (
     register_q_head,
     register_action_dist,
 )
+from rlframework.models.rl_module import (
+    CustomTorchRLModule,
+    CustomPPORLModule,
+    CustomSACRLModule,
+    CustomDQNRLModule,
+)
 
 __all__ = [
+    # Catalog
     "ComponentRegistry",
     "PPOCompositeCatalog",
     "SACCompositeCatalog",
@@ -20,4 +27,9 @@ __all__ = [
     "register_critic_head",
     "register_q_head",
     "register_action_dist",
+    # RLModule
+    "CustomTorchRLModule",
+    "CustomPPORLModule",
+    "CustomSACRLModule",
+    "CustomDQNRLModule",
 ]

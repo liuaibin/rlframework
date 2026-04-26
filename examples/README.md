@@ -9,7 +9,7 @@ Quick-start examples showing how to use each part of the framework.
 | [01_ppo_cartpole.py](01_ppo_cartpole.py) | PPO | Minimal setup, local file reporter, local checkpoint |
 | [02_sac_pendulum.py](02_sac_pendulum.py) | SAC | InfluxDB reporter (optional), MinIO upload (optional) |
 | [03_custom_algorithm.py](03_custom_algorithm.py) | Custom PPO | Hook overrides, curriculum learning, gradient clipping |
-| [04_full_production.py](04_full_production.py) | SAC | MinIO + InfluxDB + Prometheus, ModelManager catalogue |
+| [04_full_production.py](04_full_production.py) | SAC | MinIO + InfluxDB + Prometheus production setup |
 
 ---
 
@@ -131,12 +131,15 @@ backend = get_backend("s3", {
 })
 ```
 
-### Look up best model version
+### Upload checkpoints to object storage
 
 ```python
-from rlframework.storage.model_manager import ModelManager
+from rlframework.storage.checkpoint_manager import CheckpointManager
 
-mgr = ModelManager("./logs/catalogue.json")
-best = mgr.best("sac_pendulum", metric="episode_return_mean", mode="max")
-print(best["path"])  # remote path in MinIO/S3
+ckpt_mgr = CheckpointManager(
+    backend="minio",
+    backend_config={"endpoint": "minio:9000", "bucket": "rl"},
+    upload_async=True,
+)
+ckpt_mgr.upload("./checkpoints/iter_100", "sac_pendulum/iter_100.tar")
 ```

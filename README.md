@@ -121,7 +121,6 @@ rlframework/
 │
 ├── logging/                # 日志和报告系统
 │   ├── callbacks.py        # 训练回调
-│   ├── logger_creator.py   # 日志创建器
 │   ├── reporters/          # 各种报告器后端
 │   └── __init__.py
 │
@@ -132,7 +131,6 @@ rlframework/
 │
 ├── storage/                # 模型和检查点存储
 │   ├── checkpoint_manager.py  # 检查点管理
-│   ├── model_manager.py       # 模型管理
 │   ├── backends/              # 存储后端（本地、S3、MinIO）
 │   └── __init__.py
 │

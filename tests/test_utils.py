@@ -317,35 +317,3 @@ class TestTorchUtils:
 # models/components
 # ---------------------------------------------------------------------------
 
-class TestMLPComponent:
-    def test_forward_shape(self):
-        import torch
-
-        from rlframework.models.components import MLP
-
-        mlp = MLP(input_dim=8, hidden_dims=[64, 64], output_dim=4)
-        x = torch.randn(16, 8)
-        out = mlp(x)
-        assert out.shape == (16, 4)
-
-    def test_no_hidden_layers(self):
-        import torch
-
-        from rlframework.models.components import MLP
-
-        mlp = MLP(input_dim=3, hidden_dims=[], output_dim=5)
-        x = torch.randn(4, 3)
-        out = mlp(x)
-        assert out.shape == (4, 5)
-
-
-class TestResidualMLP:
-    def test_forward_shape(self):
-        import torch
-
-        from rlframework.models.components import ResidualMLP
-
-        net = ResidualMLP(input_dim=16, hidden_dim=32, num_blocks=2, output_dim=8)
-        x = torch.randn(8, 16)
-        out = net(x)
-        assert out.shape == (8, 8)
