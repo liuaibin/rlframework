@@ -26,6 +26,7 @@ help:
 	@echo ""
 	@echo "  lint         Run ruff linter"
 	@echo "  format       Format code with ruff"
+	@echo "  format-check Check formatting with ruff"
 	@echo "  typecheck    Type-check with mypy"
 	@echo "  check        Run all checks (lint + format-check + typecheck)"
 	@echo ""
