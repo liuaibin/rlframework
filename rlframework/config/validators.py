@@ -77,8 +77,7 @@ def validate_lr(lr: Any, field: str = "learning_rate") -> None:
             )
         if val > 1:
             raise ValidationError(
-                f"Schedule lr_value at entry {i} ({val}) is > 1.0. "
-                "Did you mean a smaller value?",
+                f"Schedule lr_value at entry {i} ({val}) is > 1.0. Did you mean a smaller value?",
                 field=field,
                 value=lr,
             )

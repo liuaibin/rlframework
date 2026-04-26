@@ -1,35 +1,35 @@
 from rlframework.models.catalog import (
     ComponentRegistry,
+    DQNCompositeCatalog,
     PPOCompositeCatalog,
     SACCompositeCatalog,
-    DQNCompositeCatalog,
-    register_encoder,
+    register_action_dist,
     register_actor_head,
     register_critic_head,
+    register_encoder,
     register_q_head,
-    register_action_dist,
 )
 from rlframework.models.rl_module import (
-    CustomTorchRLModule,
+    CustomDQNRLModule,
     CustomPPORLModule,
     CustomSACRLModule,
-    CustomDQNRLModule,
+    CustomTorchRLModule,
 )
 
 __all__ = [
     # Catalog
     "ComponentRegistry",
-    "PPOCompositeCatalog",
-    "SACCompositeCatalog",
-    "DQNCompositeCatalog",
-    "register_encoder",
-    "register_actor_head",
-    "register_critic_head",
-    "register_q_head",
-    "register_action_dist",
-    # RLModule
-    "CustomTorchRLModule",
+    "CustomDQNRLModule",
     "CustomPPORLModule",
     "CustomSACRLModule",
-    "CustomDQNRLModule",
+    # RLModule
+    "CustomTorchRLModule",
+    "DQNCompositeCatalog",
+    "PPOCompositeCatalog",
+    "SACCompositeCatalog",
+    "register_action_dist",
+    "register_actor_head",
+    "register_critic_head",
+    "register_encoder",
+    "register_q_head",
 ]

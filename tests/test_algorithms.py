@@ -4,6 +4,7 @@
 # Mixin hooks — default no-ops
 # ---------------------------------------------------------------------------
 
+
 class TestFrameworkAlgorithmMixin:
     def _make_mixin(self):
         from rlframework.algorithms.base import FrameworkAlgorithmMixin
@@ -111,11 +112,7 @@ class TestAlgorithmConfigs:
     def test_checkpointing_upload_async_is_passed_to_manager(self):
         from rlframework.algorithms.ppo import CustomPPOConfig
 
-        cfg = (
-            CustomPPOConfig()
-            .storage(upload_async=False)
-            .framework_checkpointing(freq=5)
-        )
+        cfg = CustomPPOConfig().storage(upload_async=False).framework_checkpointing(freq=5)
         manager = cfg.build_checkpoint_manager()
         try:
             assert manager._upload_async is False
@@ -126,11 +123,7 @@ class TestAlgorithmConfigs:
         from rlframework.algorithms.ppo import CustomPPOConfig
         from rlframework.callbacks import FrameworkCallback
 
-        cfg = (
-            CustomPPOConfig()
-            .storage()
-            .framework_checkpointing(freq=10, local_dir="/tmp/ckpts")
-        )
+        cfg = CustomPPOConfig().storage().framework_checkpointing(freq=10, local_dir="/tmp/ckpts")
         cfg._apply_framework_runtime_config()
 
         callback = cfg.callbacks_class()

@@ -8,18 +8,15 @@ Run:
     python rlframework/examples/06_custom_rl_module.py
 """
 
-import gymnasium as gym
 import numpy as np
+import ray
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import ray
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.utils.annotations import override
+
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.models.rl_module import CustomPPORLModule
-
 
 # =============================================================================
 # Define a fully custom PPO RLModule
@@ -51,8 +48,13 @@ class MinimalPPOModule(CustomPPORLModule):
         return activations.get(name.lower(), nn.ReLU)
 
     @staticmethod
-    def _build_mlp(input_dim: int, hidden_dims: list[int], output_dim: int,
-                   activation: str = "relu", output_activation=None) -> nn.Sequential:
+    def _build_mlp(
+        input_dim: int,
+        hidden_dims: list[int],
+        output_dim: int,
+        activation: str = "relu",
+        output_activation=None,
+    ) -> nn.Sequential:
         layers = []
         in_dim = input_dim
         for h_dim in hidden_dims:
@@ -91,7 +93,6 @@ class MinimalPPOModule(CustomPPORLModule):
     @override(CustomPPORLModule)
     def _forward_train(self, batch, **kwargs):
         return self._forward(batch, **kwargs)
-
 
 
 # =============================================================================

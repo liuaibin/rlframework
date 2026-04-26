@@ -68,7 +68,6 @@ os.makedirs("./logs", exist_ok=True)
 reporters = [
     # Local file — always available, no external deps
     FileReporter(filepath=f"./logs/{EXPERIMENT}.jsonl"),
-
     # InfluxDB — powers Grafana time-series dashboards
     InfluxDBReporter(
         url=INFLUXDB_URL,
@@ -77,7 +76,6 @@ reporters = [
         token=INFLUXDB_TOKEN,
         measurement="rl_training",
     ),
-
     # Prometheus Push Gateway — powers Grafana Prometheus panels
     PrometheusReporter(
         gateway=PROMETHEUS_GW,
@@ -113,11 +111,7 @@ for iteration in range(30):
     result = algo.train()
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     phase_info = ""
-    eval_reward = (
-        result.get("evaluation", {})
-        .get("env_runners", {})
-        .get("episode_return_mean")
-    )
+    eval_reward = result.get("evaluation", {}).get("env_runners", {}).get("episode_return_mean")
     if eval_reward is not None:
         phase_info = f"  eval_reward={eval_reward:.2f}"
     print(f"[iter {iteration:03d}] train_reward={mean_reward:.2f}{phase_info}")
@@ -129,5 +123,5 @@ for r in reporters:
     r.close()
 
 ray.shutdown()
-print(f"\nDone. Open Grafana at http://localhost:3000 to view dashboards.")
+print("\nDone. Open Grafana at http://localhost:3000 to view dashboards.")
 print(f"Local log: ./logs/{EXPERIMENT}.jsonl")

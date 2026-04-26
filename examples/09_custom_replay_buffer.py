@@ -39,8 +39,8 @@ config = (
         replay_buffer_config={
             "type": PrioritizedSumTreeBuffer,  # use the framework's buffer
             "capacity": 50_000,
-            "alpha": 0.6,        # priority exponent (0=uniform, 1=full priority)
-            "beta": 0.4,         # IS-weight exponent (higher = less correction)
+            "alpha": 0.6,  # priority exponent (0=uniform, 1=full priority)
+            "beta": 0.4,  # IS-weight exponent (higher = less correction)
         },
     )
     .env_runners(num_env_runners=2)
@@ -56,8 +56,12 @@ for iteration in range(40):
     result = algo.train()
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     rb = algo.local_replay_buffer
-    assert isinstance(rb, PrioritizedSumTreeBuffer), f"Expected PrioritizedSumTreeBuffer, got {type(rb)}"
-    print(f"[verified] buffer is PrioritizedSumTreeBuffer, _epsilon={rb._epsilon}, _beta_override={rb._beta_override}")
+    assert isinstance(rb, PrioritizedSumTreeBuffer), (
+        f"Expected PrioritizedSumTreeBuffer, got {type(rb)}"
+    )
+    print(
+        f"[verified] buffer is PrioritizedSumTreeBuffer, _epsilon={rb._epsilon}, _beta_override={rb._beta_override}"
+    )
     # Inspect replay buffer stats from the local replay buffer attached to the algorithm
     buffer_size = "N/A"
     added_steps = "N/A"

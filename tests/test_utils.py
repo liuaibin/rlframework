@@ -6,94 +6,110 @@ import pytest
 # validators
 # ---------------------------------------------------------------------------
 
+
 class TestValidateLR:
     # --- Fixed value: valid cases ---
     def test_fixed_float_ok(self):
         from rlframework.config.validators import validate_lr
+
         validate_lr(3e-4)
         validate_lr(1.0)
-        validate_lr(1)       # int is fine
+        validate_lr(1)  # int is fine
 
     def test_fixed_float_zero_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="must be positive"):
             validate_lr(0.0)
 
     def test_fixed_float_negative_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="must be positive"):
             validate_lr(-1e-4)
 
     def test_fixed_float_too_high_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
-        with pytest.raises(ValidationError, match=">1.0"):
+
+        with pytest.raises(ValidationError, match=r">1\.0"):
             validate_lr(2.0)
 
     # --- Schedule: valid cases ---
     def test_schedule_list_of_lists_ok(self):
         from rlframework.config.validators import validate_lr
+
         validate_lr([[0, 3e-4], [100000, 1e-4]])
         validate_lr([[0, 1e-3], [50000, 5e-4], [200000, 1e-5]])
 
     def test_schedule_list_of_tuples_ok(self):
         from rlframework.config.validators import validate_lr
+
         validate_lr([(0, 3e-4), (100000, 1e-4)])
 
     # --- Schedule: error cases ---
     def test_schedule_too_short_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="at least 2 entries"):
             validate_lr([[0, 3e-4]])
 
     def test_schedule_wrong_entry_type_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match=r"\[timestep, lr_value\] pair"):
             validate_lr([[0, 3e-4], "not a pair"])
 
     def test_schedule_entry_wrong_length_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match=r"\[timestep, lr_value\] pair"):
-            validate_lr([[0, 3e-4], [100000]])   # missing lr_value
+            validate_lr([[0, 3e-4], [100000]])  # missing lr_value
 
     def test_schedule_negative_timestep_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="non-negative int"):
             validate_lr([[0, 3e-4], [-1, 1e-4]])
 
     def test_schedule_float_timestep_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="non-negative int"):
             validate_lr([[0, 3e-4], [1.5, 1e-4]])
 
     def test_schedule_negative_lr_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="positive number"):
             validate_lr([[0, -1e-4]])
 
     def test_schedule_lr_too_high_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="> 1.0"):
+
+        with pytest.raises(ValidationError, match=r"> 1\.0"):
             validate_lr([[0, 3.0], [100000, 1.0]])
 
     def test_schedule_nonincreasing_ts_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="strictly increasing"):
             validate_lr([[0, 3e-4], [50000, 1e-4], [50000, 5e-5]])
 
     def test_schedule_first_ts_not_zero_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         # Multi-element schedule where first entry's ts != 0 hits the sentinel.
         with pytest.raises(ValidationError, match="timestep 0"):
             validate_lr([[1000, 3e-4], [2000, 1e-4]])
@@ -102,12 +118,14 @@ class TestValidateLR:
     def test_wrong_type_raises(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="schedule list"):
             validate_lr("3e-4")
 
     def test_field_name_in_error(self):
         from rlframework.config.validators import validate_lr
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError) as exc_info:
             validate_lr(0.0, field="custom.lr")
         assert "custom.lr" in str(exc_info.value)
@@ -116,18 +134,21 @@ class TestValidateLR:
 class TestValidateGamma:
     def test_valid(self):
         from rlframework.config.validators import validate_gamma
+
         validate_gamma(0.99)
-        validate_gamma(1.0)   # upper bound inclusive
+        validate_gamma(1.0)  # upper bound inclusive
 
     def test_too_low_raises(self):
         from rlframework.config.validators import validate_gamma
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="range"):
             validate_gamma(0.0)
 
     def test_too_high_raises(self):
         from rlframework.config.validators import validate_gamma
         from rlframework.utils.exceptions import ValidationError
+
         with pytest.raises(ValidationError, match="range"):
             validate_gamma(1.01)
 
@@ -135,6 +156,7 @@ class TestValidateGamma:
 # ---------------------------------------------------------------------------
 # data_utils
 # ---------------------------------------------------------------------------
+
 
 class TestFlattenDict:
     def test_flat_passthrough(self):
@@ -245,10 +267,12 @@ class TestDeepMerge:
 # torch_utils
 # ---------------------------------------------------------------------------
 
+
 class TestTorchUtils:
     @pytest.fixture
     def simple_model(self):
         import torch.nn as nn
+
         return nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 2))
 
     def test_count_parameters_all(self, simple_model):
@@ -316,4 +340,3 @@ class TestTorchUtils:
 # ---------------------------------------------------------------------------
 # models/components
 # ---------------------------------------------------------------------------
-

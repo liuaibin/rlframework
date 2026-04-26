@@ -35,6 +35,7 @@ class NormalizeObsWrapper(ObservationWrapper):
 
     def observation(self, obs):
         import numpy as np
+
         self._update_stats(obs)
         std = np.sqrt(self._var / max(self._count, 1) + self._epsilon)
         return (obs - self._mean) / std

@@ -29,6 +29,8 @@ Then register::
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 import gymnasium as gym
 import numpy as np
 
@@ -44,7 +46,7 @@ class RemoteEnv(gym.Env):
     in ``__init__`` (or before the first ``reset`` call).
     """
 
-    metadata = {"render_modes": [], "render_fps": 0}
+    metadata: ClassVar[dict[str, Any]] = {"render_modes": [], "render_fps": 0}
 
     def __init__(self):
         super().__init__()
@@ -66,9 +68,7 @@ class RemoteEnv(gym.Env):
         obs, info = self._send_reset(seed=seed, options=options)
         return np.asarray(obs, dtype=self.observation_space.dtype), info
 
-    def step(
-        self, action
-    ) -> tuple[np.ndarray, float, bool, bool, dict]:
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._elapsed_steps += 1
         obs, reward, terminated, truncated, info = self._send_step(action)
         return (
@@ -103,9 +103,7 @@ class RemoteEnv(gym.Env):
         """
         raise NotImplementedError
 
-    def _send_step(
-        self, action
-    ) -> tuple[np.ndarray | dict, float, bool, bool, dict]:
+    def _send_step(self, action) -> tuple[np.ndarray | dict, float, bool, bool, dict]:
         """Send a step request to the remote service.
 
         Args:

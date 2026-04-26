@@ -9,6 +9,7 @@ import pytest
 # Backends
 # ---------------------------------------------------------------------------
 
+
 class TestLocalBackend:
     def test_upload_copies_file(self, tmp_dir):
         from rlframework.storage.backends import get_backend
@@ -55,6 +56,7 @@ class TestLocalBackend:
 # ---------------------------------------------------------------------------
 # CheckpointManager
 # ---------------------------------------------------------------------------
+
 
 class TestCheckpointManager:
     def test_upload_sync_calls_backend(self, tmp_dir, mock_backend):
@@ -133,5 +135,3 @@ class TestCheckpointManager:
         result = manager.upload_sync(str(src), "f.pt")
         assert result == "mock://ok"
         assert fail_backend.upload.call_count == 3
-
-

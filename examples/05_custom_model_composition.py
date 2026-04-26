@@ -14,13 +14,11 @@ Run:
 
 import gymnasium as gym
 import numpy as np
-import torch
+import ray
 import torch.nn as nn
 
-import ray
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.models.catalog import ComponentRegistry
-
 
 # =============================================================================
 # 1. Define custom model components
@@ -36,7 +34,7 @@ def build_my_encoder(observation_space, action_space, model_config, framework):
     - Takes dict input ({"obs": tensor})
     - Returns dict output {"encoder_out": {"actor": tensor, "critic": tensor}}
     """
-    from ray.rllib.core.models.base import ActorCriticEncoder, ENCODER_OUT, ACTOR, CRITIC
+    from ray.rllib.core.models.base import ACTOR, CRITIC, ENCODER_OUT, ActorCriticEncoder
     from ray.rllib.core.models.torch.base import TorchModel
 
     hidden_dims = model_config.get("encoder_fcnet_hiddens", [256, 256])
@@ -208,9 +206,9 @@ def main():
 
     def print_model_structure(model, name, indent=2):
         print(f"\n{' ' * indent}[{name}] {type(model).__name__}")
-        if hasattr(model, 'net'):
+        if hasattr(model, "net"):
             print(f"{' ' * indent}  net: {model.net}")
-        if hasattr(model, 'parameters'):
+        if hasattr(model, "parameters"):
             total = sum(p.numel() for p in model.parameters())
             print(f"{' ' * indent}  params: {total:,}")
 
@@ -219,13 +217,13 @@ def main():
         assert actual_name == expected_name, f"{name} should be {expected_name}, got {actual_name}"
         print(f"  ✓ {name} verified: {actual_name}")
 
-    if hasattr(module, 'encoder'):
+    if hasattr(module, "encoder"):
         print_model_structure(module.encoder, "encoder")
         verify_custom_model(module.encoder, "encoder", "CustomActorCriticEncoder")
-    if hasattr(module, 'pi'):
+    if hasattr(module, "pi"):
         print_model_structure(module.pi, "pi")
         verify_custom_model(module.pi, "pi", "CustomActorHead")
-    if hasattr(module, 'vf'):
+    if hasattr(module, "vf"):
         print_model_structure(module.vf, "vf")
         verify_custom_model(module.vf, "vf", "CustomCriticHead")
     print(f"\n{' ' * 2}- Shared encoder (critic output used for Vf): ✓")

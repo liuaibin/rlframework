@@ -23,13 +23,13 @@ import numpy as np
 import ray
 from ray import tune
 
-from rlframework.envs import BaseEnv
 from rlframework.algorithms.ppo import CustomPPOConfig
-
+from rlframework.envs import BaseEnv
 
 # ==============================================================================
 # 1. Define your custom env by subclassing BaseEnv
 # ==============================================================================
+
 
 class PointMass2D(BaseEnv):
     """2D point-mass navigation environment.
@@ -50,9 +50,7 @@ class PointMass2D(BaseEnv):
         self.max_speed = max_speed
         self.success_threshold = success_threshold
 
-        obs_space = gym.spaces.Box(
-            low=-bounds, high=bounds, shape=(4,), dtype=np.float32
-        )
+        obs_space = gym.spaces.Box(low=-bounds, high=bounds, shape=(4,), dtype=np.float32)
         act_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         super().__init__(
@@ -152,6 +150,7 @@ class PointMass2D(BaseEnv):
 # 2. Register with tune so RLlib workers can find the env by name
 # ==============================================================================
 
+
 def make_pointmass_env(config=None):
     return PointMass2D(
         bounds=config.get("bounds", 5.0),
@@ -170,6 +169,7 @@ gym.register(id="PointMass2D-v0", entry_point=PointMass2D, max_episode_steps=200
 # 3. Standalone sanity-check (no Ray)
 # ==============================================================================
 
+
 def sanity_check():
     """Random policy — verify env logic without RLlib."""
     print("=" * 60)
@@ -181,13 +181,13 @@ def sanity_check():
     print(f"  act_space: {env.action_space}")
 
     for ep in range(3):
-        obs, _ = env.reset(seed=42 + ep)
+        _obs, _ = env.reset(seed=42 + ep)
         ep_ret = 0.0
         ep_len = 0
         done = False
         while not done:
             action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
+            _obs, reward, terminated, truncated, info = env.step(action)
             ep_ret += reward
             ep_len += 1
             done = terminated or truncated
@@ -204,6 +204,7 @@ def sanity_check():
 # ==============================================================================
 # 4. Train with CustomPPO
 # ==============================================================================
+
 
 def train():
     print("\n" + "=" * 60)

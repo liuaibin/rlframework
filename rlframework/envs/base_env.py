@@ -27,7 +27,7 @@ Then register with RLlib::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -46,7 +46,10 @@ class BaseEnv(gym.Env):
         kwargs: Forwarded to the Gymnasium Env init.
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata: ClassVar[dict[str, Any]] = {
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 30,
+    }
 
     def __init__(
         self,
@@ -79,9 +82,7 @@ class BaseEnv(gym.Env):
         obs, info = self._reset(seed=seed, options=options)
         return np.asarray(obs, dtype=self.observation_space.dtype), info
 
-    def step(
-        self, action
-    ) -> tuple[np.ndarray, float, bool, bool, dict]:
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._elapsed_steps += 1
         obs, reward, terminated, truncated, info = self._step(action)
 
@@ -103,6 +104,7 @@ class BaseEnv(gym.Env):
     def close(self) -> None:
         try:
             import pygame
+
             pygame.quit()
         except Exception:
             pass

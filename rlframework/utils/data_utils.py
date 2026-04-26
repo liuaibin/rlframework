@@ -89,6 +89,7 @@ def deep_merge(base: dict, overrides: dict) -> dict:
         Merged dict (new object; *base* is not mutated).
     """
     import copy
+
     result = copy.deepcopy(base)
     for k, v in overrides.items():
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):

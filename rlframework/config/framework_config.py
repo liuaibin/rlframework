@@ -33,8 +33,8 @@ from typing import Any
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 
-from rlframework.config import validators
 from rlframework.callbacks import FrameworkCallback
+from rlframework.config import validators
 
 
 class FrameworkConfigMixin:
@@ -60,12 +60,12 @@ class FrameworkConfigMixin:
         self._metrics_reporter_configs: dict[str, dict] = {}
 
         # --- checkpointing section ---
-        self._checkpoint_freq: int = 0           # 0 = manual only
+        self._checkpoint_freq: int = 0  # 0 = manual only
         self._checkpoint_local_dir: str = "./checkpoints"
 
         # --- storage section ---
         self._storage_upload_async: bool = True
-        self._best_upload_freq: int = 1         # upload best model every N improvements
+        self._best_upload_freq: int = 1  # upload best model every N improvements
 
     def _validate_framework_config(self) -> None:
         """Validate framework and training config parameters.
@@ -154,6 +154,7 @@ class FrameworkConfigMixin:
         validators.validate_non_negative_int(freq, "checkpoint_freq")
         if not isinstance(local_dir, str) or not local_dir.strip():
             from rlframework.utils.exceptions import ValidationError
+
             raise ValidationError(
                 "checkpoint local_dir must be a non-empty string",
                 field="checkpointing.local_dir",
@@ -202,6 +203,7 @@ class FrameworkConfigMixin:
         if not self._storage_configured:
             return None
         from rlframework.storage import CheckpointManager
+
         return CheckpointManager(
             backend=self._storage_backend,
             backend_config=self._storage_backend_config,

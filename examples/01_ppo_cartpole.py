@@ -13,10 +13,12 @@ in the training loop needed.
 Run:
     python rlframework/examples/01_ppo_cartpole.py
 """
+
 import glob
 import os
 
 import ray
+
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.callbacks import FrameworkCallback
 from rlframework.observability.reporters import FileReporter
@@ -56,6 +58,7 @@ config = (
     .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
+
 # ---------------------------------------------------------------------------
 # 4. Helper: find latest checkpoint for resume
 # ---------------------------------------------------------------------------
@@ -66,6 +69,7 @@ def find_latest_checkpoint(checkpoint_dir: str):
     if not checkpoints:
         return None
     return max(checkpoints, key=os.path.getmtime)
+
 
 # ---------------------------------------------------------------------------
 # 5. Build algorithm

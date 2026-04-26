@@ -101,9 +101,11 @@ class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
         # If we have custom components, configure RLModule to use CompositeCatalog
         if custom_config:
             # Update model config
-            self.model.update({
-                "_framework_custom_config": custom_config,
-            })
+            self.model.update(
+                {
+                    "_framework_custom_config": custom_config,
+                }
+            )
 
             # Set catalog class to PPOCompositeCatalog
             self.rl_module(

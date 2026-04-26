@@ -17,17 +17,15 @@ from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.callbacks import FrameworkCallback
 from rlframework.observability.reporters import FileReporter
 
-
 # ---------------------------------------------------------------------------
 # 1. Custom callback that adds episode-level metrics
 # ---------------------------------------------------------------------------
 
+
 class EvalMetricsCallback(FrameworkCallback):
     """Adds success rate and episode efficiency metrics via MetricsLogger."""
 
-    def on_episode_end(
-        self, *, episode, env_runner=None, metrics_logger=None, env=None, **kwargs
-    ):
+    def on_episode_end(self, *, episode, env_runner=None, metrics_logger=None, env=None, **kwargs):
         # Compute episode-level stats
         ep_return = episode.get_return()
         ep_length = episode.env_steps()
@@ -58,8 +56,8 @@ config = (
     .training(lr=3e-4, train_batch_size=4000, num_epochs=10, minibatch_size=128)
     .env_runners(num_env_runners=2)
     .evaluation(
-        evaluation_interval=5,          # evaluate every 5 training iterations
-        evaluation_duration=10,         # run 10 evaluation episodes
+        evaluation_interval=5,  # evaluate every 5 training iterations
+        evaluation_duration=10,  # run 10 evaluation episodes
         evaluation_num_env_runners=1,
     )
     .callbacks(lambda: EvalMetricsCallback.with_reporters(reporters))

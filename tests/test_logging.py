@@ -3,11 +3,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # FileReporter
 # ---------------------------------------------------------------------------
+
 
 class TestFileReporter:
     def test_report_writes_json_line(self, tmp_dir):
@@ -62,6 +61,7 @@ class TestFileReporter:
 # InfluxDBReporter (mocked HTTP)
 # ---------------------------------------------------------------------------
 
+
 class TestInfluxDBReporter:
     def test_report_sends_post_request(self, sample_metrics):
         from rlframework.observability.reporters import InfluxDBReporter
@@ -97,6 +97,7 @@ class TestInfluxDBReporter:
 # ---------------------------------------------------------------------------
 # FrameworkCallback — _extract_metrics
 # ---------------------------------------------------------------------------
+
 
 class TestFrameworkCallback:
     def test_extract_metrics_flattens_dict(self, sample_metrics):
@@ -152,4 +153,3 @@ class TestFrameworkCallback:
         assert flat["eval/episode_return_mean"] == 12.0
         assert flat["eval/success"] == 0.7
         assert flat["eval/custom_eval_score"] == 3.14
-

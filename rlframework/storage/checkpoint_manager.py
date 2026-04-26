@@ -112,9 +112,7 @@ class CheckpointManager:
         run_async = self._upload_async if async_mode is None else async_mode
 
         if run_async:
-            return self._get_executor().submit(
-                self._upload_with_retry, local_path, remote_name
-            )
+            return self._get_executor().submit(self._upload_with_retry, local_path, remote_name)
 
         # Preserve legacy behavior: default sync mode still returns a Future.
         result = self._upload_with_retry(local_path, remote_name)
@@ -125,9 +123,7 @@ class CheckpointManager:
         future.set_result(result)
         return future
 
-    def upload_sync(
-        self, local_path: str, remote_name: str | None = None
-    ) -> str:
+    def upload_sync(self, local_path: str, remote_name: str | None = None) -> str:
         """Deprecated: use ``upload(..., async_mode=False)`` instead."""
         warnings.warn(
             "upload_sync() is deprecated; use upload(..., async_mode=False).",

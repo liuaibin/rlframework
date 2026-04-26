@@ -41,12 +41,12 @@ SAVE_FREQ = 5  # save checkpoint every 5 iterations
 # =========================================================================
 ckpt_manager = CheckpointManager(
     backend="minio",
-    backend_config=dict(
-        endpoint=MINIO_ENDPOINT,
-        access_key=MINIO_ACCESS_KEY,
-        secret_key=MINIO_SECRET_KEY,
-        bucket=MINIO_BUCKET,
-    ),
+    backend_config={
+        "endpoint": MINIO_ENDPOINT,
+        "access_key": MINIO_ACCESS_KEY,
+        "secret_key": MINIO_SECRET_KEY,
+        "bucket": MINIO_BUCKET,
+    },
     upload_async=True,
     upload_retries=3,
 )

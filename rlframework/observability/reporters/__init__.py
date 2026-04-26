@@ -10,9 +10,7 @@ class BaseReporter(ABC):
     """Abstract base class for all reporters."""
 
     @abstractmethod
-    def report(
-        self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train"
-    ) -> None:
+    def report(self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train") -> None:
         """Send *metrics* to the backend."""
 
     def close(self) -> None:  # noqa: B027
@@ -32,14 +30,10 @@ class FileReporter(BaseReporter):
         if self._fh is None:
             import os
 
-            os.makedirs(
-                os.path.dirname(os.path.abspath(self._filepath)), exist_ok=True
-            )
+            os.makedirs(os.path.dirname(os.path.abspath(self._filepath)), exist_ok=True)
             self._fh = open(self._filepath, "a", encoding="utf-8")
 
-    def report(
-        self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train"
-    ) -> None:
+    def report(self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train") -> None:
         self._ensure_file()
         record = {
             "timestamp": time.time(),
@@ -94,9 +88,7 @@ class InfluxDBReporter(BaseReporter):
         self._measurement = measurement
         self._timeout = timeout
 
-    def report(
-        self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train"
-    ) -> None:
+    def report(self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train") -> None:
         try:
             import requests
         except ImportError:
@@ -110,12 +102,7 @@ class InfluxDBReporter(BaseReporter):
         )
         if not fields:
             return
-        line = (
-            f"{self._measurement},"
-            f"iteration={iteration},phase={phase} "
-            f"{fields} "
-            f"{ts}"
-        )
+        line = f"{self._measurement},iteration={iteration},phase={phase} {fields} {ts}"
         try:
             requests.post(
                 self._url,
@@ -141,9 +128,7 @@ class PrometheusReporter(BaseReporter):
         self._job = job
         self._grouping_key = grouping_key or {}
 
-    def report(
-        self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train"
-    ) -> None:
+    def report(self, metrics: dict[str, Any], iteration: int = 0, phase: str = "train") -> None:
         try:
             from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
         except ImportError:

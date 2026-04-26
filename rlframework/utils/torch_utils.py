@@ -31,7 +31,8 @@ def count_parameters(model: nn.Module, trainable_only: bool = True) -> int:
         Total parameter count.
     """
     params: Iterable[nn.Parameter] = (
-        model.parameters() if not trainable_only
+        model.parameters()
+        if not trainable_only
         else filter(lambda p: p.requires_grad, model.parameters())
     )
     return sum(p.numel() for p in params)

@@ -10,9 +10,7 @@ class _ToyEnv(gym.Env):
     metadata: ClassVar[dict[str, list[str]]] = {"render_modes": []}
 
     def __init__(self):
-        self.observation_space = gym.spaces.Box(
-            low=-10.0, high=10.0, shape=(2,), dtype=np.float32
-        )
+        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(2,), dtype=np.float32)
         self.action_space = gym.spaces.Discrete(1)
         self._step = 0
 

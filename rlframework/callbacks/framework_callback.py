@@ -24,7 +24,6 @@ Best-model saving is driven by :meth:`on_evaluate_end` and requires evaluation
 to be enabled.  See ``examples/`` for a concrete usage pattern.
 """
 
-
 import logging
 import os
 from functools import partial
@@ -86,9 +85,7 @@ class FrameworkCallback(RLlibCallback):
         # Convert to absolute paths so PyArrow (used by RLlib's save_to_path)
         # can handle them.
         self._ckpt_local_dir = os.path.abspath(checkpoint_local_dir)
-        self._best_local_dir = os.path.abspath(
-            best_local_dir or (checkpoint_local_dir + "/best")
-        )
+        self._best_local_dir = os.path.abspath(best_local_dir or (checkpoint_local_dir + "/best"))
         self._best_reward = float("-inf")
         self._best_upload_freq = max(0, best_upload_freq)
         self._best_improvement_count = 0
@@ -167,9 +164,7 @@ class FrameworkCallback(RLlibCallback):
         saved_path = algorithm.save_to_path(ckpt_path)
         logger.info("Periodic checkpoint saved: %s", saved_path)
 
-    def _update_best_model_if_improved(
-        self, algorithm, eval_metrics: dict, iteration: int
-    ) -> None:
+    def _update_best_model_if_improved(self, algorithm, eval_metrics: dict, iteration: int) -> None:
         """Save and optionally upload the current model if eval reward improves."""
         eval_return = eval_metrics.get("eval/episode_return_mean", float("-inf"))
         if eval_return <= self._best_reward:
@@ -180,14 +175,17 @@ class FrameworkCallback(RLlibCallback):
         local_path = algorithm.save_to_path(self._best_local_dir)
         logger.info(
             "New best model (eval_reward=%.2f, iter=%d) saved to %s.",
-            eval_return, iteration, local_path,
+            eval_return,
+            iteration,
+            local_path,
         )
         if self._ckpt_manager is not None and self._best_upload_freq > 0:
             if self._best_improvement_count % self._best_upload_freq == 0:
                 self._ckpt_manager.upload(local_path, "best.tar")
                 logger.info(
                     "Best model upload triggered (improvement #%d, freq=%d).",
-                    self._best_improvement_count, self._best_upload_freq,
+                    self._best_improvement_count,
+                    self._best_upload_freq,
                 )
 
     @staticmethod
@@ -200,12 +198,8 @@ class FrameworkCallback(RLlibCallback):
         env_runners = result.get(ENV_RUNNER_RESULTS, {})
         flat["episode_return_mean"] = env_runners.get(EPISODE_RETURN_MEAN, 0.0)
         flat["episode_len_mean"] = env_runners.get("episode_len_mean", 0.0)
-        flat["num_env_steps_sampled_lifetime"] = result.get(
-            "num_env_steps_sampled_lifetime", 0
-        )
-        flat["num_env_steps_trained_lifetime"] = result.get(
-            "num_env_steps_trained_lifetime", 0
-        )
+        flat["num_env_steps_sampled_lifetime"] = result.get("num_env_steps_sampled_lifetime", 0)
+        flat["num_env_steps_trained_lifetime"] = result.get("num_env_steps_trained_lifetime", 0)
 
         for key, value in env_runners.items():
             if key in {EPISODE_RETURN_MEAN, "episode_len_mean"}:
@@ -263,11 +257,12 @@ class FrameworkCallback(RLlibCallback):
     def _resource_stats() -> dict:
         try:
             import psutil
+
             proc = psutil.Process(os.getpid())
             mem = proc.memory_info()
             return {
                 "system/process_cpu_percent": proc.cpu_percent(interval=0.05),
-                "system/process_memory_rss_mb": mem.rss / (1024 ** 2),
+                "system/process_memory_rss_mb": mem.rss / (1024**2),
                 "system/system_memory_percent": psutil.virtual_memory().percent,
             }
         except Exception:

@@ -52,22 +52,22 @@ from rlframework.storage.checkpoint_manager import CheckpointManager
 # ---------------------------------------------------------------------------
 # Configuration (override via env vars in CI/CD)
 # ---------------------------------------------------------------------------
-MINIO_ENDPOINT   = os.environ.get("MINIO_ENDPOINT",   "localhost:9000")
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
-MINIO_BUCKET     = os.environ.get("MINIO_BUCKET",     "rl-checkpoints")
+MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "rl-checkpoints")
 
-INFLUXDB_URL     = os.environ.get("INFLUXDB_URL",    "http://localhost:8086")
-INFLUXDB_ORG     = os.environ.get("INFLUXDB_ORG",    "rl")
-INFLUXDB_BUCKET  = os.environ.get("INFLUXDB_BUCKET", "metrics")
-INFLUXDB_TOKEN   = os.environ.get("INFLUXDB_TOKEN",  "my-super-secret-token")
+INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
+INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "rl")
+INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "metrics")
+INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "my-super-secret-token")
 
-PROMETHEUS_GW    = os.environ.get("PROMETHEUS_GW",   "localhost:9091")
+PROMETHEUS_GW = os.environ.get("PROMETHEUS_GW", "localhost:9091")
 
-MODEL_NAME       = "sac_pendulum"
-EXPERIMENT_NAME  = "pendulum_production_v1"
+MODEL_NAME = "sac_pendulum"
+EXPERIMENT_NAME = "pendulum_production_v1"
 TOTAL_ITERATIONS = 300
-CHECKPOINT_FREQ  = 20
+CHECKPOINT_FREQ = 20
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -103,11 +103,11 @@ reporters = [
 backend = get_backend(
     "minio",
     {
-        "endpoint":   MINIO_ENDPOINT,
+        "endpoint": MINIO_ENDPOINT,
         "access_key": MINIO_ACCESS_KEY,
         "secret_key": MINIO_SECRET_KEY,
-        "bucket":     MINIO_BUCKET,
-        "secure":     False,
+        "bucket": MINIO_BUCKET,
+        "secure": False,
     },
 )
 ckpt_manager = CheckpointManager(
@@ -133,9 +133,7 @@ config = (
         tau=0.005,
     )
     .env_runners(num_env_runners=2, rollout_fragment_length=1)
-    .callbacks(
-        FrameworkCallback.with_reporters(reporters, collect_resource_stats=True)
-    )
+    .callbacks(FrameworkCallback.with_reporters(reporters, collect_resource_stats=True))
 )
 
 # ---------------------------------------------------------------------------
@@ -151,10 +149,8 @@ for iteration in range(TOTAL_ITERATIONS):
 
     # Periodic checkpoint
     if (iteration + 1) % CHECKPOINT_FREQ == 0:
-        local_path = algo.save_to_path(
-            f"./checkpoints/{EXPERIMENT_NAME}/iter_{iteration+1}"
-        )
-        remote_name = f"{EXPERIMENT_NAME}/iter_{iteration+1}.tar"
+        local_path = algo.save_to_path(f"./checkpoints/{EXPERIMENT_NAME}/iter_{iteration + 1}")
+        remote_name = f"{EXPERIMENT_NAME}/iter_{iteration + 1}.tar"
         ckpt_manager.upload(local_path, remote_name)
         print(f"  -> checkpoint uploaded: {remote_name}")
 

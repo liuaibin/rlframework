@@ -98,9 +98,7 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
             if isinstance(buffer_type, str) and "Episode" in buffer_type:
                 return True
             resolved = _resolve_replay_buffer_type(buffer_type)
-            if isinstance(resolved, type) and issubclass(
-                resolved, EpisodeReplayBuffer
-            ):
+            if isinstance(resolved, type) and issubclass(resolved, EpisodeReplayBuffer):
                 return True
             return False
 
@@ -159,9 +157,11 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
         # If we have custom components, configure RLModule to use CompositeCatalog
         if custom_config:
             # Update model config
-            self.model.update({
-                "_framework_custom_config": custom_config,
-            })
+            self.model.update(
+                {
+                    "_framework_custom_config": custom_config,
+                }
+            )
 
             # Set catalog class to SACCompositeCatalog
             self.rl_module(
@@ -219,9 +219,9 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
             return False
 
         if _is_episode_buffer(buffer_type):
-            config["replay_buffer_config"][
-                "metrics_num_episodes_for_smoothing"
-            ] = self.config.metrics_num_episodes_for_smoothing
+            config["replay_buffer_config"]["metrics_num_episodes_for_smoothing"] = (
+                self.config.metrics_num_episodes_for_smoothing
+            )
 
         # Use from_config to instantiate the replay buffer.
         from ray.rllib.utils.from_config import from_config
@@ -242,4 +242,3 @@ class CustomSAC(FrameworkAlgorithmMixin, SAC):
                         self.metrics.log_value(key, value)
                     else:
                         self.metrics.log_value(key, value, window=1)
-

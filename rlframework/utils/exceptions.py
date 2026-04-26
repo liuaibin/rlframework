@@ -126,5 +126,7 @@ class CheckpointError(RLFrameworkError):
         full_message = f"Checkpoint error: {message}"
         if checkpoint_path:
             full_message = f"Checkpoint error for '{checkpoint_path}': {message}"
-        hint = hint or "Ensure the checkpoint exists and was created by a compatible algorithm version"
+        hint = (
+            hint or "Ensure the checkpoint exists and was created by a compatible algorithm version"
+        )
         super().__init__(full_message, hint=hint)

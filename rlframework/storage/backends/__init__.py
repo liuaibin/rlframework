@@ -29,6 +29,7 @@ from abc import ABC, abstractmethod
 # Base
 # ---------------------------------------------------------------------------
 
+
 class BaseBackend(ABC):
     """Minimal interface every storage backend must implement."""
 
@@ -44,6 +45,7 @@ class BaseBackend(ABC):
 # ---------------------------------------------------------------------------
 # LocalBackend
 # ---------------------------------------------------------------------------
+
 
 class LocalBackend(BaseBackend):
     """Copies files/directories inside a local *root* directory.
@@ -82,6 +84,7 @@ class LocalBackend(BaseBackend):
 # MinIOBackend
 # ---------------------------------------------------------------------------
 
+
 class MinIOBackend(BaseBackend):
     """Stores checkpoints in a MinIO / S3-compatible object store.
 
@@ -102,17 +105,18 @@ class MinIOBackend(BaseBackend):
         secure: bool = False,
     ):
         import os as _os
+
         _ak = access_key or _os.getenv("MINIO_ACCESS_KEY", "")
         _sk = secret_key or _os.getenv("MINIO_SECRET_KEY", "")
         try:
             from minio import Minio  # type: ignore
+
             self._client = Minio(endpoint, access_key=_ak, secret_key=_sk, secure=secure)
             if not self._client.bucket_exists(bucket):
                 self._client.make_bucket(bucket)
         except ImportError as exc:
             raise ImportError(
-                "MinIOBackend requires the 'minio' package.  "
-                "Install with: pip install minio"
+                "MinIOBackend requires the 'minio' package.  Install with: pip install minio"
             ) from exc
         self._bucket = bucket
 
@@ -128,6 +132,7 @@ class MinIOBackend(BaseBackend):
 # ---------------------------------------------------------------------------
 # S3Backend
 # ---------------------------------------------------------------------------
+
 
 class S3Backend(BaseBackend):
     """Stores checkpoints in AWS S3.
@@ -149,14 +154,14 @@ class S3Backend(BaseBackend):
     ):
         try:
             import boto3  # type: ignore
+
             kwargs = {}
             if region_name:
                 kwargs["region_name"] = region_name
             self._s3 = boto3.client("s3", **kwargs)
         except ImportError as exc:
             raise ImportError(
-                "S3Backend requires the 'boto3' package.  "
-                "Install with: pip install boto3"
+                "S3Backend requires the 'boto3' package.  Install with: pip install boto3"
             ) from exc
         self._bucket = bucket
         self._prefix = prefix.rstrip("/")
@@ -197,8 +202,5 @@ def get_backend(name: str, config: dict) -> BaseBackend:
         KeyError: When *name* is not registered.
     """
     if name not in _BACKEND_REGISTRY:
-        raise KeyError(
-            f"Unknown storage backend '{name}'. "
-            f"Available: {list(_BACKEND_REGISTRY)}"
-        )
+        raise KeyError(f"Unknown storage backend '{name}'. Available: {list(_BACKEND_REGISTRY)}")
     return _BACKEND_REGISTRY[name](**config)

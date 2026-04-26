@@ -12,15 +12,16 @@ Run:
 from typing import Any
 
 import ray
+from ray.rllib.utils.typing import ResultDict
 
 from rlframework.algorithms.ppo import CustomPPO, CustomPPOConfig
 from rlframework.callbacks import FrameworkCallback
 from rlframework.observability.reporters import FileReporter
-from ray.rllib.utils.typing import ResultDict
 
 # ---------------------------------------------------------------------------
 # 1. Define a custom PPO subclass
 # ---------------------------------------------------------------------------
+
 
 class CurriculumPPO(CustomPPO):
     """PPO with simple curriculum: increase env difficulty over time."""
@@ -51,6 +52,7 @@ class CurriculumPPO(CustomPPO):
 # ---------------------------------------------------------------------------
 # 2. Custom config extending CustomPPOConfig
 # ---------------------------------------------------------------------------
+
 
 class CurriculumPPOConfig(CustomPPOConfig):
     def __init__(self):

@@ -25,8 +25,9 @@ Or use the string path for YAML configs::
     }
 """
 
-from typing import Any, Dict
+from typing import Any
 
+from ray.rllib.execution.segment_tree import SumSegmentTree as SumTree
 from ray.rllib.utils.replay_buffers.prioritized_episode_buffer import (
     PrioritizedEpisodeReplayBuffer,
 )
@@ -89,12 +90,9 @@ class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
 
 __all__ = [
     "PrioritizedSumTreeBuffer",
-    "SumTree",
     "ReservoirReplayBuffer",
+    "SumTree",
 ]
-
-# Import SumTree here so existing users get it from this module too.
-from ray.rllib.execution.segment_tree import SumSegmentTree as SumTree
 
 
 class ReservoirReplayBuffer:
@@ -157,12 +155,12 @@ class ReservoirReplayBuffer:
         self._hit_count.extend(indices)
         return concat_samples(samples)
 
-    def get_state(self) -> Dict[str, Any]:
+    def get_state(self) -> dict[str, Any]:
         return {
             "_storage": self._storage,
             "_num_seen": self._num_seen,
         }
 
-    def set_state(self, state: Dict[str, Any]) -> None:
+    def set_state(self, state: dict[str, Any]) -> None:
         self._storage = state["_storage"]
         self._num_seen = state["_num_seen"]

@@ -37,18 +37,17 @@ Available RLModules:
 
 from __future__ import annotations
 
-import gymnasium as gym
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
+import gymnasium as gym
 from ray.rllib.core.rl_module.rl_module import RLModule
+
 try:
     # RLlib versions differ on whether RLModuleState is exported.
     from ray.rllib.core.rl_module.rl_module import RLModuleState
 except ImportError:  # pragma: no cover - compatibility fallback
-    RLModuleState = Dict[str, Any]
-from ray.rllib.core.models.base import Model
+    RLModuleState = dict[str, Any]
 from ray.rllib.utils.annotations import override
-
 
 # ----------------------------------------------------------------------
 # Base class for custom RLModules
@@ -72,7 +71,7 @@ class CustomTorchRLModule(RLModule):
     framework: str = "torch"
 
     @override(RLModule)
-    def get_initial_state(self) -> Dict[str, Any]:
+    def get_initial_state(self) -> dict[str, Any]:
         """Return initial hidden states for RNN-based modules.
 
         Override this if your module uses recurrent layers.
@@ -81,7 +80,7 @@ class CustomTorchRLModule(RLModule):
         return {}
 
     @override(RLModule)
-    def _forward(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+    def _forward(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Generic forward pass used in all phases.
 
         Override for custom forward behavior that should be shared
@@ -90,7 +89,7 @@ class CustomTorchRLModule(RLModule):
         raise NotImplementedError
 
     @override(RLModule)
-    def _forward_inference(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+    def _forward_inference(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Forward pass during inference (evaluation, greedy acting).
 
         Override when inference behavior differs from exploration/training.
@@ -99,7 +98,7 @@ class CustomTorchRLModule(RLModule):
         return self._forward(batch, **kwargs)
 
     @override(RLModule)
-    def _forward_exploration(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+    def _forward_exploration(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Forward pass during exploration (action sampling).
 
         Override to add exploration noise or stochasticity.
@@ -108,7 +107,7 @@ class CustomTorchRLModule(RLModule):
         return self._forward(batch, **kwargs)
 
     @override(RLModule)
-    def _forward_train(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+    def _forward_train(self, batch: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Forward pass during training (computing loss inputs).
 
         Override to compute extra outputs needed for loss computation.
@@ -192,7 +191,7 @@ class CustomPPORLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
-        model_config: Optional[Dict] = None,
+        model_config: dict | None = None,
     ):
         # Store spaces before calling super().__init__ so setup() can use them
         self._observation_space = observation_space
@@ -250,7 +249,7 @@ class CustomSACRLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
-        model_config: Optional[Dict] = None,
+        model_config: dict | None = None,
     ):
         self._observation_space = observation_space
         self._action_space = action_space
@@ -305,7 +304,7 @@ class CustomDQNRLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
-        model_config: Optional[Dict] = None,
+        model_config: dict | None = None,
     ):
         self._observation_space = observation_space
         self._action_space = action_space

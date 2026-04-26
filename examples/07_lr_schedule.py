@@ -11,6 +11,7 @@ Run:
 """
 
 import ray
+
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.callbacks import FrameworkCallback
 from rlframework.observability.reporters import FileReporter
@@ -26,10 +27,10 @@ ray.init(ignore_reinit_error=True)
 #    RLlib linearly interpolates between entries.
 # ---------------------------------------------------------------------------
 lr_schedule = [
-    [0,     1e-3],    # start at 1e-3
-    [20000, 5e-4],    # decay to 5e-4 by 20k steps
-    [50000, 1e-4],    # decay to 1e-4 by 50k steps
-    [80000, 1e-5],    # decay to 1e-5 by 80k steps
+    [0, 1e-3],  # start at 1e-3
+    [20000, 5e-4],  # decay to 5e-4 by 20k steps
+    [50000, 1e-4],  # decay to 1e-4 by 50k steps
+    [80000, 1e-5],  # decay to 1e-5 by 80k steps
 ]
 
 # ---------------------------------------------------------------------------
@@ -41,13 +42,13 @@ config = (
     CustomPPOConfig()
     .environment("CartPole-v1")
     .training(
-        lr=lr_schedule,               # <-- pass schedule instead of fixed float
+        lr=lr_schedule,  # <-- pass schedule instead of fixed float
         train_batch_size=4000,
         num_epochs=10,
         minibatch_size=128,
     )
     .env_runners(num_env_runners=2)
-    .callbacks(lambda:FrameworkCallback.with_reporters(reporters))
+    .callbacks(lambda: FrameworkCallback.with_reporters(reporters))
 )
 
 # ---------------------------------------------------------------------------
@@ -65,9 +66,7 @@ for iteration in range(50):
     # Structure: roe.get() -> {module_id: {"default_optimizer_learning_rate": float, ...}}
     current_lr = "N/A"
     try:
-        learner_results = algo.learner_group.foreach_learner(
-            lambda learner: learner.metrics.peek()
-        )
+        learner_results = algo.learner_group.foreach_learner(lambda learner: learner.metrics.peek())
         for item in learner_results:
             roe = item.result_or_error
             if not roe.ok:
@@ -90,10 +89,7 @@ for iteration in range(50):
         pass
 
     print(
-        f"[iter {iteration:03d}] "
-        f"steps={total_steps:>7d}  "
-        f"lr={current_lr}  "
-        f"reward={mean_reward:.2f}"
+        f"[iter {iteration:03d}] steps={total_steps:>7d}  lr={current_lr}  reward={mean_reward:.2f}"
     )
 
 algo.stop()

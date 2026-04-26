@@ -34,13 +34,13 @@ Usage:
 
 from __future__ import annotations
 
-import gymnasium as gym
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any, ClassVar
 
+import gymnasium as gym
+from ray.rllib.algorithms.dqn.dqn_catalog import DQNCatalog
 from ray.rllib.algorithms.ppo.ppo_catalog import PPOCatalog
 from ray.rllib.algorithms.sac.sac_catalog import SACCatalog
-from ray.rllib.algorithms.dqn.dqn_catalog import DQNCatalog
-
 
 # 存储全局 builder 函数，供跨进程使用
 _registered_builders: dict = {}
@@ -60,15 +60,15 @@ class ComponentRegistry:
     - q_head: Q 网络头 (用于 SAC/DQN)
     """
 
-    _encoders: dict[str, EncoderBuilder] = {}
-    _actor_heads: dict[str, HeadBuilder] = {}
-    _critic_heads: dict[str, HeadBuilder] = {}
-    _q_heads: dict[str, HeadBuilder] = {}
-    _vf_heads: dict[str, HeadBuilder] = {}
-    _action_dists: dict[str, Callable] = {}
+    _encoders: ClassVar[dict[str, EncoderBuilder]] = {}
+    _actor_heads: ClassVar[dict[str, HeadBuilder]] = {}
+    _critic_heads: ClassVar[dict[str, HeadBuilder]] = {}
+    _q_heads: ClassVar[dict[str, HeadBuilder]] = {}
+    _vf_heads: ClassVar[dict[str, HeadBuilder]] = {}
+    _action_dists: ClassVar[dict[str, Callable]] = {}
 
     @classmethod
-    def register_encoder(cls, name: str = None):
+    def register_encoder(cls, name: str | None = None):
         """注册自定义 encoder.
 
         Usage:
@@ -76,15 +76,17 @@ class ComponentRegistry:
             def build_my_encoder(observation_space, action_space, model_config, framework):
                 return MyEncoder(...)
         """
+
         def decorator(func: EncoderBuilder):
             encoder_name = name or func.__name__
             cls._encoders[encoder_name] = func
             _registered_builders[encoder_name] = func  # 存到全局，供跨进程使用
             return func
+
         return decorator
 
     @classmethod
-    def register_actor_head(cls, name: str = None):
+    def register_actor_head(cls, name: str | None = None):
         """注册自定义 actor head (策略头).
 
         Usage:
@@ -92,15 +94,17 @@ class ComponentRegistry:
             def build_pi_head(input_dim, action_space, model_config, framework):
                 return MyPiHead(...)
         """
+
         def decorator(func: HeadBuilder):
             head_name = name or func.__name__
             cls._actor_heads[head_name] = func
             _registered_builders[head_name] = func  # 存到全局，供跨进程使用
             return func
+
         return decorator
 
     @classmethod
-    def register_critic_head(cls, name: str = None):
+    def register_critic_head(cls, name: str | None = None):
         """注册自定义 critic head (价值头).
 
         Usage:
@@ -108,15 +112,17 @@ class ComponentRegistry:
             def build_vf_head(input_dim, model_config, framework):
                 return MyVfHead(...)
         """
+
         def decorator(func: HeadBuilder):
             head_name = name or func.__name__
             cls._critic_heads[head_name] = func
             _registered_builders[head_name] = func  # 存到全局，供跨进程使用
             return func
+
         return decorator
 
     @classmethod
-    def register_q_head(cls, name: str = None):
+    def register_q_head(cls, name: str | None = None):
         """注册自定义 Q-network head (用于 SAC/DQN).
 
         Usage:
@@ -124,14 +130,16 @@ class ComponentRegistry:
             def build_q_head(input_dim, action_space, model_config, framework):
                 return MyQHead(...)
         """
+
         def decorator(func: HeadBuilder):
             head_name = name or func.__name__
             cls._q_heads[head_name] = func
             return func
+
         return decorator
 
     @classmethod
-    def register_vf_head(cls, name: str = None):
+    def register_vf_head(cls, name: str | None = None):
         """注册自定义 Value Function head (用于 DQN dueling architecture).
 
         Usage:
@@ -139,14 +147,16 @@ class ComponentRegistry:
             def build_vf_head(input_dim, model_config, framework):
                 return MyVfHead(...)
         """
+
         def decorator(func: HeadBuilder):
             head_name = name or func.__name__
             cls._vf_heads[head_name] = func
             return func
+
         return decorator
 
     @classmethod
-    def register_action_dist(cls, name: str = None):
+    def register_action_dist(cls, name: str | None = None):
         """注册自定义动作分布.
 
         Usage:
@@ -154,10 +164,12 @@ class ComponentRegistry:
             def build_action_dist(action_space, model_config, framework):
                 return MyDistribution(...)
         """
+
         def decorator(func: Callable):
             dist_name = name or func.__name__
             cls._action_dists[dist_name] = func
             return func
+
         return decorator
 
     @classmethod
@@ -264,9 +276,7 @@ class PPOCompositeCatalog(PPOCatalog):
         model_config_dict: dict,
     ):
         # 提取框架自定义配置
-        self._framework_custom_config = model_config_dict.get(
-            "_framework_custom_config", {}
-        )
+        self._framework_custom_config = model_config_dict.get("_framework_custom_config", {})
         super().__init__(observation_space, action_space, model_config_dict)
 
     def build_actor_critic_encoder(self, framework: str):
@@ -347,9 +357,7 @@ class SACCompositeCatalog(SACCatalog):
         action_space: gym.Space,
         model_config_dict: dict,
     ):
-        self._framework_custom_config = model_config_dict.get(
-            "_framework_custom_config", {}
-        )
+        self._framework_custom_config = model_config_dict.get("_framework_custom_config", {})
         super().__init__(observation_space, action_space, model_config_dict)
 
     def build_encoder(self, framework: str):
@@ -407,9 +415,7 @@ class DQNCompositeCatalog(DQNCatalog):
         action_space: gym.Space,
         model_config_dict: dict,
     ):
-        self._framework_custom_config = model_config_dict.get(
-            "_framework_custom_config", {}
-        )
+        self._framework_custom_config = model_config_dict.get("_framework_custom_config", {})
         super().__init__(observation_space, action_space, model_config_dict)
 
     def build_encoder(self, framework: str):
@@ -458,27 +464,27 @@ class DQNCompositeCatalog(DQNCatalog):
 # 便捷函数
 # ----------------------------------------------------------------------
 
-def register_encoder(name: str = None):
+
+def register_encoder(name: str | None = None):
     """ComponentRegistry.register_encoder 的便捷别名."""
     return ComponentRegistry.register_encoder(name)
 
 
-def register_actor_head(name: str = None):
+def register_actor_head(name: str | None = None):
     """ComponentRegistry.register_actor_head 的便捷别名."""
     return ComponentRegistry.register_actor_head(name)
 
 
-def register_critic_head(name: str = None):
+def register_critic_head(name: str | None = None):
     """ComponentRegistry.register_critic_head 的便捷别名."""
     return ComponentRegistry.register_critic_head(name)
 
 
-def register_q_head(name: str = None):
+def register_q_head(name: str | None = None):
     """ComponentRegistry.register_q_head 的便捷别名."""
     return ComponentRegistry.register_q_head(name)
 
 
-def register_action_dist(name: str = None):
+def register_action_dist(name: str | None = None):
     """ComponentRegistry.register_action_dist 的便捷别名."""
     return ComponentRegistry.register_action_dist(name)
-
