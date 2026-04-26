@@ -264,6 +264,22 @@ class TestDeepMerge:
 
 
 # ---------------------------------------------------------------------------
+# replay_buffers
+# ---------------------------------------------------------------------------
+
+
+class TestReplayBuffers:
+    def test_public_exports_only_prioritized_episode_buffer(self):
+        import rlframework.utils as utils
+        from rlframework.utils import replay_buffers
+
+        assert "PrioritizedSumTreeBuffer" in replay_buffers.__all__
+        assert "ReservoirReplayBuffer" not in replay_buffers.__all__
+        assert not hasattr(replay_buffers, "ReservoirReplayBuffer")
+        assert not hasattr(utils, "ReservoirReplayBuffer")
+
+
+# ---------------------------------------------------------------------------
 # torch_utils
 # ---------------------------------------------------------------------------
 

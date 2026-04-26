@@ -44,7 +44,7 @@ config = (
         },
     )
     .env_runners(num_env_runners=2)
-    .callbacks(lambda: FrameworkCallback.with_reporters(reporters))
+    .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 # ===========================================================================

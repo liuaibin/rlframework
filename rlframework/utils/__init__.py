@@ -12,7 +12,6 @@ from rlframework.utils.exceptions import (
 )
 from rlframework.utils.replay_buffers import (
     PrioritizedSumTreeBuffer,
-    ReservoirReplayBuffer,
 )
 from rlframework.utils.torch_utils import (
     count_parameters,
@@ -31,7 +30,6 @@ __all__ = [
     "PrioritizedSumTreeBuffer",
     "RLFrameworkError",
     "RayInitError",
-    "ReservoirReplayBuffer",
     "StorageError",
     "ValidationError",
     "count_parameters",

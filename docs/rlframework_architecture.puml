@@ -1,0 +1,584 @@
+@startuml RLFramework_Architecture
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam defaultFontSize 10
+skinparam shadowing false
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BackgroundColor<<App>> #FFF3E0
+    BackgroundColor<<Config>> #BBDEFB
+    BackgroundColor<<Algorithm>> #C8E6C9
+    BackgroundColor<<Callback>> #FFE082
+    BackgroundColor<<Model>> #E1BEE7
+    BackgroundColor<<Env>> #D7CCC8
+    BackgroundColor<<Observability>> #B2EBF2
+    BackgroundColor<<Storage>> #D1C4E9
+    BackgroundColor<<Utility>> #ECEFF1
+    BackgroundColor<<RLlib>> #F5F5F5
+    BackgroundColor<<External>> #FFCDD2
+    BorderColor #424242
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 9
+}
+
+title rlframework 架构图 - 基于 RLlib 原生接口的工程化扩展框架
+
+' ===================== User-facing entry points =====================
+package "0. User Project / Experiment" {
+    class "Training Script\n(examples / project code)" as UserScript <<App>> {
+        + ray.init()
+        + config = CustomPPOConfig() / CustomSACConfig()
+        + config.environment(...)
+        + config.training(...)
+        + config.storage(...)
+        + config.metrics(...)
+        + algo = config.build()
+        + algo.train()
+    }
+
+    class "Custom Algorithm\n(optional)" as UserAlgorithm <<App>> {
+        + on_before_training_step()
+        + on_after_training_step(result)
+    }
+
+    class "Custom Env\n(optional)" as UserEnv <<App>> {
+        + _reset(seed, options)
+        + _step(action)
+    }
+
+    class "Custom Model Component\n(optional)" as UserComponent <<App>> {
+        + build_encoder(...)
+        + build_actor_head(...)
+        + build_critic_head(...)
+        + build_q_head(...)
+    }
+}
+
+' ===================== 上游运行时依赖 =====================
+package "1. 上游运行时（RLlib / Gymnasium）" {
+    class "PPOConfig\nray.rllib" as RLLibPPOConfig <<RLlib>> {
+        + environment()
+        + training()
+        + callbacks()
+        + rl_module()
+        + build()
+    }
+
+    class "SACConfig\nray.rllib" as RLLibSACConfig <<RLlib>> {
+        + environment()
+        + training()
+        + callbacks()
+        + rl_module()
+        + validate()
+        + build()
+    }
+
+    class "PPO\nray.rllib" as RLLibPPO <<RLlib>> {
+        + setup(config)
+        + train()
+        + training_step()
+        + metrics
+    }
+
+    class "SAC\nray.rllib" as RLLibSAC <<RLlib>> {
+        + setup(config)
+        + train()
+        + training_step()
+        + _create_local_replay_buffer_if_necessary()
+        + metrics
+    }
+
+    class "RLModuleSpec\nray.rllib" as RLModuleSpec <<RLlib>> {
+        + rl_module_class
+        + catalog_class
+        + model_config
+    }
+
+    class "RLModule\nray.rllib" as RLLibRLModule <<RLlib>> {
+        + setup()
+        + _forward_inference()
+        + _forward_exploration()
+        + _forward_train()
+        + get_state()
+        + set_state()
+    }
+
+    class "PPO/SAC/DQN Catalog\nray.rllib" as RLLibCatalog <<RLlib>> {
+        + build_encoder()
+        + build_actor_critic_encoder()
+        + build_pi_head()
+        + build_vf_head()
+        + build_qf_head()
+    }
+
+    class "RLlibCallback\nray.rllib" as RLLibCallback <<RLlib>> {
+        + on_train_result()
+        + on_evaluate_end()
+        + on_episode_end()
+    }
+
+    class "ReplayBuffer / EpisodeReplayBuffer\nray.rllib" as RLLibReplay <<RLlib>> {
+        + add()
+        + sample()
+        + get_state()
+        + set_state()
+    }
+
+    class "gymnasium.Env" as GymEnv <<RLlib>> {
+        + reset()
+        + step()
+        + render()
+        + close()
+    }
+}
+
+' ===================== 框架配置层 =====================
+package "2. 配置层" {
+    class CustomPPOConfig <<Config>> {
+        + __init__(algo_class=CustomPPO)
+        + build()
+        + framework_models(encoder, actor_head, critic_head)
+    }
+
+    class CustomSACConfig <<Config>> {
+        + __init__()
+        + checkpointing(freq, local_dir)
+        + build()
+        + validate()
+        + framework_models(encoder, actor_head, critic_head, q_head)
+    }
+
+    class FrameworkConfigMixin <<Config>> {
+        == 框架链式配置 API ==
+        + storage(backend, upload_async, best_upload_freq, **kwargs)
+        + metrics(reporters, reporter_configs)
+        + framework_checkpointing(freq, local_dir)
+        --
+        == 运行时注入 ==
+        + build_reporters()
+        + build_checkpoint_manager()
+        + _apply_framework_runtime_config()
+    }
+
+    class "validators.py" as Validators <<Utility>> {
+        + validate_lr()
+        + validate_gamma()
+        + validate_backend()
+        + validate_workers()
+        + validate_gpu_config()
+    }
+}
+
+CustomPPOConfig --|> RLLibPPOConfig
+CustomPPOConfig --|> FrameworkConfigMixin
+CustomSACConfig --|> RLLibSACConfig
+CustomSACConfig --|> FrameworkConfigMixin
+FrameworkConfigMixin ..> Validators : 校验 lr/gamma/backend
+
+note right of FrameworkConfigMixin
+    设计重点：
+    - 不重写 RLlib 配置体系
+    - 通过 mixin 给 PPOConfig/SACConfig 增加
+      storage / metrics / checkpointing
+    - build() 前注入 FrameworkCallback
+      和 CheckpointManager
+end note
+
+' ===================== 算法扩展层 =====================
+package "3. 算法扩展层" {
+    class FrameworkAlgorithmMixin <<Algorithm>> {
+        + on_before_training_step()
+        + on_after_training_step(result)
+    }
+
+    class CustomPPO <<Algorithm>> {
+        + get_default_config()
+        + setup(config)
+        + training_step()
+    }
+
+    class CustomSAC <<Algorithm>> {
+        + get_default_config()
+        + setup(config)
+        + _create_local_replay_buffer_if_necessary(config)
+        + training_step()
+    }
+
+}
+
+CustomPPO --|> RLLibPPO
+CustomPPO --|> FrameworkAlgorithmMixin
+CustomSAC --|> RLLibSAC
+CustomSAC --|> FrameworkAlgorithmMixin
+CustomPPOConfig ..> CustomPPO : 默认算法类
+CustomSACConfig ..> CustomSAC : 默认算法类
+
+note bottom of FrameworkAlgorithmMixin
+    用户扩展算法时只需要继承 CustomPPO/CustomSAC，
+    覆盖 training_step 前后的 hook。
+    采样、Learner、权重同步仍由 RLlib 原生运行。
+end note
+
+' ===================== 运行时回调与观测 =====================
+package "4. 运行时 Hook / 指标观测" {
+    class FrameworkCallback <<Callback>> {
+        + with_reporters(reporters, **kwargs)
+        + on_train_result(result, algorithm, ...)
+        + on_evaluate_end(evaluation_metrics, algorithm, ...)
+        + on_episode_end(...)
+        --
+        + _extract_metrics(result)
+        + _extract_eval_metrics(evaluation_metrics)
+        + _fan_out(metrics, iteration, phase)
+        + _save_periodic_checkpoint(algorithm, iteration)
+        + _update_best_model_if_improved(algorithm, metrics, iteration)
+    }
+
+    abstract class BaseReporter <<Observability>> {
+        + report(metrics, iteration, phase)
+        + close()
+    }
+
+    class FileReporter <<Observability>> {
+        + filepath
+        + flush_every
+        + report()
+        + close()
+    }
+
+    class InfluxDBReporter <<Observability>> {
+        + url
+        + org
+        + bucket
+        + measurement
+        + report()
+    }
+
+    class PrometheusReporter <<Observability>> {
+        + gateway
+        + job
+        + grouping_key
+        + report()
+    }
+
+    class "logging 命名空间\n(兼容旧导入路径)" as LoggingAliases <<Utility>> {
+        + rlframework.logging.FrameworkCallback
+        + rlframework.logging.reporters.*
+    }
+}
+
+FrameworkCallback --|> RLLibCallback
+BaseReporter <|-- FileReporter
+BaseReporter <|-- InfluxDBReporter
+BaseReporter <|-- PrometheusReporter
+FrameworkCallback o-- "0..*" BaseReporter : 分发指标
+LoggingAliases ..> FrameworkCallback
+LoggingAliases ..> BaseReporter
+FrameworkConfigMixin ..> FrameworkCallback : 注入 callbacks(...)
+FrameworkConfigMixin ..> BaseReporter : 构建 reporters
+
+note right of FrameworkCallback
+    Callback 负责横切能力：
+    - 训练/评估指标扁平化
+    - File/InfluxDB/Prometheus 上报
+    - 周期性本地 checkpoint
+    - 评估最优模型保存和远端上传
+end note
+
+' ===================== 存储与 Checkpoint =====================
+package "5. 存储 / Checkpoint 管理" {
+    class CheckpointManager <<Storage>> {
+        + upload(local_path, remote_name, async_mode)
+        + upload_sync(local_path, remote_name)
+        + download(remote_name, local_path)
+        + shutdown(wait)
+        --
+        + _upload_with_retry(local_path, remote_name)
+        + _normalize_remote_name(local_path, remote_name)
+        + _fsync(path)
+    }
+
+    abstract class BaseBackend <<Storage>> {
+        + upload(local_path, remote_name)
+        + download(remote_name, local_path)
+    }
+
+    class LocalBackend <<Storage>> {
+        + root
+        + upload()
+        + download()
+    }
+
+    class MinIOBackend <<Storage>> {
+        + endpoint
+        + bucket
+        + secure
+        + upload()
+        + download()
+    }
+
+    class S3Backend <<Storage>> {
+        + bucket
+        + prefix
+        + region_name
+        + upload()
+        + download()
+    }
+
+    class "get_backend()\n后端注册表" as BackendFactory <<Storage>> {
+        + local -> LocalBackend
+        + minio -> MinIOBackend
+        + s3 -> S3Backend
+    }
+}
+
+CheckpointManager o-- BaseBackend : 委托上传/下载
+BaseBackend <|-- LocalBackend
+BaseBackend <|-- MinIOBackend
+BaseBackend <|-- S3Backend
+BackendFactory ..> BaseBackend : 创建
+CheckpointManager ..> BackendFactory : 后端名 + 配置
+FrameworkCallback o-- CheckpointManager : 最优模型上传
+FrameworkConfigMixin ..> CheckpointManager : 构建 checkpoint manager
+
+note bottom of CheckpointManager
+    目录 checkpoint 会先打成 tar；
+    upload_async=True 时使用 ThreadPoolExecutor；
+    上传失败会按 upload_retries 重试。
+end note
+
+' ===================== 模型与 RLModule 扩展 =====================
+package "6. 模型 / RLModule 扩展" {
+    class ComponentRegistry <<Model>> {
+        == 注册 ==
+        + register_encoder(name)
+        + register_actor_head(name)
+        + register_critic_head(name)
+        + register_q_head(name)
+        + register_vf_head(name)
+        + register_action_dist(name)
+        --
+        == 查找 ==
+        + get_encoder(name)
+        + get_actor_head(name)
+        + get_critic_head(name)
+        + get_q_head(name)
+        + get_vf_head(name)
+        + get_action_dist(name)
+    }
+
+    class PPOCompositeCatalog <<Model>> {
+        + build_actor_critic_encoder(framework)
+        + build_pi_head(framework)
+        + build_vf_head(framework)
+    }
+
+    class SACCompositeCatalog <<Model>> {
+        + build_encoder(framework)
+        + build_pi_head(framework)
+        + build_qf_head(framework)
+    }
+
+    class DQNCompositeCatalog <<Model>> {
+        + build_encoder(framework)
+        + build_af_head(framework)
+        + build_vf_head(framework)
+    }
+
+    class CustomTorchRLModule <<Model>> {
+        + framework = "torch"
+        + get_initial_state()
+        + _forward(batch, **kwargs)
+        + _forward_inference(batch, **kwargs)
+        + _forward_exploration(batch, **kwargs)
+        + _forward_train(batch, **kwargs)
+        + get_state()
+        + set_state(state)
+    }
+
+    class CustomPPORLModule <<Model>> {
+        + setup()
+        + get_non_inference_attributes()
+    }
+
+    class CustomSACRLModule <<Model>> {
+        + setup()
+        + get_non_inference_attributes()
+    }
+
+    class CustomDQNRLModule <<Model>> {
+        + setup()
+        + get_non_inference_attributes()
+    }
+}
+
+PPOCompositeCatalog --|> RLLibCatalog
+SACCompositeCatalog --|> RLLibCatalog
+DQNCompositeCatalog --|> RLLibCatalog
+PPOCompositeCatalog ..> ComponentRegistry : 查找自定义 builder
+SACCompositeCatalog ..> ComponentRegistry : 查找自定义 builder
+DQNCompositeCatalog ..> ComponentRegistry : 查找自定义 builder
+CustomTorchRLModule --|> RLLibRLModule
+CustomPPORLModule --|> CustomTorchRLModule
+CustomSACRLModule --|> CustomTorchRLModule
+CustomDQNRLModule --|> CustomTorchRLModule
+CustomPPOConfig ..> RLModuleSpec : 使用 PPOCompositeCatalog
+CustomSACConfig ..> RLModuleSpec : 使用 SACCompositeCatalog
+RLModuleSpec ..> RLLibCatalog : 构建默认/自定义组件
+RLModuleSpec ..> RLLibRLModule : 可选：完整自定义模块
+UserComponent ..> ComponentRegistry : 装饰器注册
+UserScript ..> CustomPPORLModule : 可选：RLModuleSpec 接入
+
+note bottom of ComponentRegistry
+    两种模型扩展路径：
+    1. framework_models(...) + CompositeCatalog：
+       替换 encoder/head/distribution 的局部组件
+    2. Custom*RLModule + RLModuleSpec：
+       完全接管 forward 逻辑和状态序列化
+end note
+
+' ===================== 环境封装与 Wrapper =====================
+package "7. 环境封装" {
+    class BaseEnv <<Env>> {
+        + observation_space
+        + action_space
+        + max_episode_steps
+        + reset(seed, options)
+        + step(action)
+        + render()
+        + close()
+        --
+        + _reset(seed, options)
+        + _step(action)
+        + _render_rgb_array()
+        + _render_human()
+    }
+
+    class RemoteEnv <<Env>> {
+        + reset(seed, options)
+        + step(action)
+        + close()
+        --
+        + _send_reset(seed, options)
+        + _send_step(action)
+        + _send_close()
+    }
+
+    class NormalizeObsWrapper <<Env>> {
+        + _update_stats(obs)
+        + observation(obs)
+    }
+
+    class RecordEpisodeStatsWrapper <<Env>> {
+        + reset(**kwargs)
+        + step(action)
+    }
+}
+
+BaseEnv --|> GymEnv
+RemoteEnv --|> GymEnv
+UserEnv --|> BaseEnv
+NormalizeObsWrapper ..> GymEnv : 包装
+RecordEpisodeStatsWrapper ..> GymEnv : 包装
+UserScript ..> UserEnv : tune.register_env(...) 注册
+RLLibPPO ..> GymEnv : EnvRunner 采样
+RLLibSAC ..> GymEnv : EnvRunner 采样
+
+note right of BaseEnv
+    BaseEnv/RemoteEnv 消除 Gymnasium reset/step 模板代码，
+    用户只实现业务状态转换或远端服务通信。
+end note
+
+' ===================== Replay Buffer 与工具模块 =====================
+package "8. Replay Buffer / 工具模块" {
+    class PrioritizedSumTreeBuffer <<Utility>> {
+        + sum_tree
+    }
+
+    class "data_utils.py" as DataUtils <<Utility>> {
+        + flatten_dict()
+        + unflatten_dict()
+        + safe_mean()
+        + deep_merge()
+    }
+
+    class "torch_utils.py" as TorchUtils <<Utility>> {
+        + get_device()
+        + count_parameters()
+        + freeze_parameters()
+        + unfreeze_parameters()
+        + polyak_update()
+    }
+
+    class "exceptions.py" as Exceptions <<Utility>> {
+        + RLFrameworkError
+        + ConfigurationError
+        + ValidationError
+        + StorageError
+        + AlgorithmError
+        + ModelError
+        + EnvironmentError
+        + CheckpointError
+    }
+}
+
+PrioritizedSumTreeBuffer --|> RLLibReplay
+CustomSAC ..> PrioritizedSumTreeBuffer : 校验自定义 EpisodeReplayBuffer
+Validators ..> Exceptions
+FrameworkCallback ..> DataUtils : 指标扁平化辅助
+CustomTorchRLModule ..> TorchUtils : 用户模块可复用工具函数
+
+' ===================== 外部系统 =====================
+package "9. 外部系统" {
+    class "metrics.jsonl" as JSONL <<External>>
+    class "InfluxDB v2" as InfluxDB <<External>>
+    class "Prometheus\nPush Gateway" as PushGateway <<External>>
+    class "本地文件系统" as LocalFS <<External>>
+    class "MinIO" as MinIO <<External>>
+    class "AWS S3" as AWS <<External>>
+}
+
+FileReporter ..> JSONL : 写入 JSON Lines
+InfluxDBReporter ..> InfluxDB : HTTP Line Protocol 写入
+PrometheusReporter ..> PushGateway : push_to_gateway() 推送
+LocalBackend ..> LocalFS : 复制文件/目录
+MinIOBackend ..> MinIO : 上传/下载对象
+S3Backend ..> AWS : 上传/下载文件
+
+' ===================== 主运行流程 =====================
+UserScript --> CustomPPOConfig : 配置 PPO
+UserScript --> CustomSACConfig : 配置 SAC
+UserAlgorithm --|> CustomPPO
+UserAlgorithm --|> CustomSAC
+CustomPPOConfig --> CustomPPO : build()
+CustomSACConfig --> CustomSAC : build()
+CustomPPO --> FrameworkCallback : RLlib 回调事件
+CustomSAC --> FrameworkCallback : RLlib 回调事件
+
+note as RuntimeFlow
+    运行时主流程：
+    1. 用户创建 CustomPPOConfig/CustomSACConfig。
+    2. FrameworkConfigMixin 在委托给 RLlib build() 前，
+       注入 reporters、CheckpointManager 和 FrameworkCallback。
+    3. RLlib 负责采样、Learner 更新、Replay Buffer 和权重同步。
+    4. CustomPPO/CustomSAC 在 training_step 前后调用框架 hook。
+    5. FrameworkCallback 接收训练/评估结果，上报指标，
+       保存周期性 checkpoint，并上传最优模型。
+
+    核心设计原则：
+    继承并扩展 RLlib 原生接口，不替代 RLlib runtime。
+end note
+
+RuntimeFlow .. UserScript
+
+@enduml

@@ -1,0 +1,90 @@
+@startuml RLFramework_Layered_Overview
+!theme plain
+top to bottom direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam nodesep 80
+skinparam ranksep 90
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam rectangle {
+    BorderColor #424242
+    BackgroundColor<<App>> #FFF3E0
+    BackgroundColor<<Framework>> #E3F2FD
+    BackgroundColor<<Extension>> #F3E5F5
+    BackgroundColor<<Ops>> #FFF8E1
+    BackgroundColor<<Upstream>> #E8F5E9
+    BackgroundColor<<External>> #FFEBEE
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title rlframework 分层总览 - 基于 RLlib 的工程化增强
+
+package "1. 应用层" {
+    rectangle "业务训练脚本 / 实验代码\n- 选择 PPO / SAC\n- 配置环境、训练参数、模型、存储、指标\n- 调用 config.build() / algo.train()" as App <<App>>
+}
+
+package "2. rlframework 配置装配层" {
+    rectangle "统一配置入口\nCustomPPOConfig / CustomSACConfig\n- 继承 RLlib PPOConfig / SACConfig\n- 增加 storage() / metrics() / framework_checkpointing()\n- 增加 framework_models()\n- build 前装配 Callback、Reporter、CheckpointManager、RLModuleSpec" as Config <<Framework>>
+}
+
+package "3. rlframework 扩展能力层" {
+    rectangle "算法扩展\nCustomPPO / CustomSAC\n- 继承 RLlib PPO / SAC\n- 混入 FrameworkAlgorithmMixin\n- 提供 training_step 前后 hook" as AlgoExt <<Extension>>
+
+    rectangle "模型与环境扩展\n- ComponentRegistry + CompositeCatalog：替换 encoder/head/distribution\n- Custom*RLModule：完全自定义模型逻辑\n- BaseEnv / RemoteEnv / Wrappers：标准化环境接入" as ModelEnvExt <<Extension>>
+
+    rectangle "Replay 与工具\n- PrioritizedSumTreeBuffer：兼容新 EnvRunner API 的 EpisodeReplayBuffer 子类\n- validators / data_utils / torch_utils / exceptions" as UtilityExt <<Extension>>
+}
+
+package "4. rlframework 工程化横切层" {
+    rectangle "训练运行横切能力\nFrameworkCallback + Reporters + CheckpointManager\n- 训练/评估指标提取和上报\n- 周期性 checkpoint\n- best model 保存与上传\n- 本地 / MinIO / S3 存储后端" as Ops <<Ops>>
+}
+
+package "5. 上游原生运行时层" {
+    rectangle "RLlib Runtime\n- PPO/SAC 配置和算法基类\n- RLModule / Catalog / ReplayBuffer / RLlibCallback\n- EnvRunner、采样、Learner 更新、权重同步、训练循环" as RLlib <<Upstream>>
+
+    rectangle "Gymnasium Env API\n- reset() / step() / render() / close()\n- RLlib EnvRunner 通过该接口采样" as Gym <<Upstream>>
+}
+
+package "6. 外部系统层" {
+    rectangle "指标系统\nmetrics.jsonl / InfluxDB / Prometheus Gateway" as MetricsBackend <<External>>
+    rectangle "模型存储\nLocal FS / MinIO / AWS S3" as StorageBackend <<External>>
+}
+
+' 主链路：从业务代码到 RLlib 训练运行时
+App --> Config : 使用配置 API
+Config --> AlgoExt : 指定算法类
+AlgoExt --> RLlib : 继承并委托 PPO / SAC
+
+' rlframework 基于 RLlib 增强的能力
+Config --> ModelEnvExt : 配置模型和环境
+Config --> UtilityExt : 配置 replay / 校验辅助
+Config --> Ops : 注入工程化能力
+ModelEnvExt --> RLlib : 依赖 RLModule / Catalog
+ModelEnvExt --> Gym : 实现 Env API
+UtilityExt --> RLlib : 扩展 ReplayBuffer
+Ops --> RLlib : 依赖 RLlibCallback
+
+' 运行时与外部系统
+RLlib --> Gym : EnvRunner 采样
+Ops --> MetricsBackend : 上报指标
+Ops --> StorageBackend : 上传 checkpoint / model
+
+note bottom of Config
+    这张图只表达一件事：
+    rlframework 不替代 RLlib 训练核心，
+    而是在 RLlib 之上补齐配置装配、算法 hook、
+    模型/环境扩展、Replay 工具、指标观测和 checkpoint 存储。
+end note
+
+@enduml

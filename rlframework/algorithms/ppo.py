@@ -12,7 +12,7 @@ customise PPO behaviour inside rlframework::
             return result
 """
 
-from typing import Any, cast
+from typing import Any
 
 from ray.rllib.algorithms.ppo import PPO, PPOConfig
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
@@ -23,7 +23,6 @@ from rlframework.config.framework_config import FrameworkConfigMixin
 from rlframework.models.catalog import (
     PPOCompositeCatalog,
 )
-from rlframework.utils.replay_buffers import ReservoirReplayBuffer
 
 
 class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
@@ -153,16 +152,3 @@ class CustomPPO(FrameworkAlgorithmMixin, PPO):
                         metrics.log_value(key, value)
                     else:
                         metrics.log_value(key, value, window=1)
-
-
-class CustomReplayBufferPPO(CustomPPO):
-    """PPO with rlframework extension hooks.
-
-    All :py:class:`FrameworkAlgorithmMixin` hook methods are available.
-    The mixin methods are called *around* the standard RLlib PPO
-    ``training_step``; untouched hooks are no-ops.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.local_replay_buffer = cast(Any, ReservoirReplayBuffer(capacity=1000))

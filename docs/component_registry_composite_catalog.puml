@@ -1,0 +1,198 @@
+@startuml ComponentRegistry_CompositeCatalog
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 70
+skinparam ranksep 70
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<User>> #FFF3E0
+    BackgroundColor<<Config>> #E3F2FD
+    BackgroundColor<<Registry>> #F3E5F5
+    BackgroundColor<<Catalog>> #E8F5E9
+    BackgroundColor<<Upstream>> #ECEFF1
+    BackgroundColor<<Product>> #FFF8E1
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title ComponentRegistry + CompositeCatalog 组件注册与装配流程
+
+actor "用户代码" as User
+
+package "1. 用户自定义组件" {
+    class UserEncoderBuilder <<User>> {
+        + decorator: register_encoder(my_encoder)
+        + build(obs_space, action_space, model_config, framework)
+    }
+
+    class UserActorHeadBuilder <<User>> {
+        + decorator: register_actor_head(my_actor_head)
+        + build(latent_dims, action_space, model_config, framework)
+    }
+
+    class UserValueHeadBuilder <<User>> {
+        + decorator: register_critic_head / register_q_head / register_vf_head
+        + build(latent_dims, ..., model_config, framework)
+    }
+}
+
+package "2. rlframework.models.catalog" {
+    class ComponentRegistry <<Registry>> {
+        {static} _encoders: dict[str, EncoderBuilder]
+        {static} _actor_heads: dict[str, HeadBuilder]
+        {static} _critic_heads: dict[str, HeadBuilder]
+        {static} _q_heads: dict[str, HeadBuilder]
+        {static} _vf_heads: dict[str, HeadBuilder]
+        {static} _action_dists: dict[str, Callable]
+        --
+        {static} register_encoder(name)
+        {static} register_actor_head(name)
+        {static} register_critic_head(name)
+        {static} register_q_head(name)
+        {static} register_vf_head(name)
+        {static} register_action_dist(name)
+        --
+        {static} get_encoder(name)
+        {static} get_actor_head(name)
+        {static} get_critic_head(name)
+        {static} get_q_head(name)
+        {static} get_vf_head(name)
+        {static} get_action_dist(name)
+    }
+
+    class PPOCompositeCatalog <<Catalog>> {
+        - _framework_custom_config
+        + build_actor_critic_encoder(framework)
+        + build_pi_head(framework)
+        + build_vf_head(framework)
+    }
+
+    class SACCompositeCatalog <<Catalog>> {
+        - _framework_custom_config
+        + build_encoder(framework)
+        + build_pi_head(framework)
+        + build_qf_head(framework)
+    }
+
+    class DQNCompositeCatalog <<Catalog>> {
+        - _framework_custom_config
+        + build_encoder(framework)
+        + build_af_head(framework)
+        + build_vf_head(framework)
+    }
+}
+
+package "3. rlframework.algorithms 配置入口" {
+    class CustomPPOConfig <<Config>> {
+        + framework_models(encoder, actor_head, critic_head)
+    }
+
+    class CustomSACConfig <<Config>> {
+        + framework_models(encoder, actor_head, critic_head, q_head)
+    }
+}
+
+package "4. RLlib 原生构建链路" {
+    class RLModuleSpec <<Upstream>> {
+        + catalog_class
+        + model_config
+    }
+
+    class PPOCatalog <<Upstream>>
+    class SACCatalog <<Upstream>>
+    class DQNCatalog <<Upstream>>
+
+    class RLModule <<Upstream>> {
+        + role: RLModule / Learner
+        + catalog.build_*()
+    }
+}
+
+package "5. 最终网络组件" {
+    class CustomComponent <<Product>> {
+        + 自定义 Encoder / Head 实例
+    }
+    class DefaultComponent <<Product>> {
+        + RLlib 默认 Encoder / Head 实例
+    }
+}
+
+User --> UserEncoderBuilder : 定义 builder
+User --> UserActorHeadBuilder : 定义 builder
+User --> UserValueHeadBuilder : 定义 builder
+
+UserEncoderBuilder ..> ComponentRegistry : 装饰器注册\nname -> builder
+UserActorHeadBuilder ..> ComponentRegistry : 装饰器注册\nname -> builder
+UserValueHeadBuilder ..> ComponentRegistry : 装饰器注册\nname -> builder
+
+User --> CustomPPOConfig : .framework_models(...)
+User --> CustomSACConfig : .framework_models(...)
+
+CustomPPOConfig ..> RLModuleSpec : catalog_class=PPOCompositeCatalog\nmodel_config._framework_custom_config
+CustomSACConfig ..> RLModuleSpec : catalog_class=SACCompositeCatalog\nmodel_config._framework_custom_config
+
+PPOCompositeCatalog --|> PPOCatalog
+SACCompositeCatalog --|> SACCatalog
+DQNCompositeCatalog --|> DQNCatalog
+
+RLModuleSpec --> PPOCompositeCatalog : PPO 场景实例化
+RLModuleSpec --> SACCompositeCatalog : SAC 场景实例化
+RLModule --> PPOCompositeCatalog : build_actor_critic_encoder()\nbuild_pi_head() / build_vf_head()
+RLModule --> SACCompositeCatalog : build_encoder()\nbuild_pi_head() / build_qf_head()
+RLModule --> DQNCompositeCatalog : build_encoder()\nbuild_af_head() / build_vf_head()
+
+PPOCompositeCatalog ..> ComponentRegistry : get_encoder()\nget_actor_head()\nget_critic_head()
+SACCompositeCatalog ..> ComponentRegistry : get_encoder()\nget_actor_head()\nget_q_head()
+DQNCompositeCatalog ..> ComponentRegistry : get_encoder()\nget_q_head()\nget_vf_head()
+
+PPOCompositeCatalog --> CustomComponent : 找到 builder 后调用
+SACCompositeCatalog --> CustomComponent : 找到 builder 后调用
+DQNCompositeCatalog --> CustomComponent : 找到 builder 后调用
+PPOCatalog --> DefaultComponent : fallback super().build_*()
+SACCatalog --> DefaultComponent : fallback super().build_*()
+DQNCatalog --> DefaultComponent : fallback super().build_*()
+PPOCompositeCatalog ..> PPOCatalog : name=default 或未注册\n走默认实现
+SACCompositeCatalog ..> SACCatalog : name=default 或未注册\n走默认实现
+DQNCompositeCatalog ..> DQNCatalog : name=default 或未注册\n走默认实现
+
+note bottom of ComponentRegistry
+    ComponentRegistry 负责“名字 -> builder”的全局注册和查找。
+    encoder / actor_head / critic_head 同时写入 _registered_builders，
+    便于跨进程场景复用已注册 builder。
+end note
+
+note bottom of RLModuleSpec
+    framework_models(...) 不直接创建网络，
+    只把自定义组件名放入 model_config._framework_custom_config，
+    并把 RLModuleSpec.catalog_class 切到对应 CompositeCatalog。
+end note
+
+note bottom of CustomComponent
+    CompositeCatalog 的核心分支：
+    1. 从 _framework_custom_config 取 custom_* 名称；
+    2. 到 ComponentRegistry 查 builder；
+    3. 找到则 builder(...) 创建自定义组件；
+    4. 找不到或 default 则调用 RLlib 原生 Catalog。
+end note
+
+legend right
+    <b>常用路径</b>
+    用户注册 builder -> framework_models 选择组件 -> RLModuleSpec 使用 CompositeCatalog -> build_* 时按名称查表 -> 自定义组件或默认组件
+endlegend
+
+@enduml
