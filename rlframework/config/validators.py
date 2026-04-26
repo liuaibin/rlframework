@@ -185,10 +185,10 @@ def validate_model_config(model_config: dict[str, Any]) -> None:
 def validate_backend(backend: str, valid_backends: list[str]) -> None:
     """Validate storage backend name."""
     if backend not in valid_backends:
-        raise ConfigurationError(
+        raise ValidationError(
             f"Unknown backend: '{backend}'. Available: {valid_backends}",
             field="backend",
-            hint=f"Choose from: {', '.join(valid_backends)}",
+            value=backend,
         )
 
 

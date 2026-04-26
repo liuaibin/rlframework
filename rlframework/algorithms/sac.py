@@ -70,22 +70,9 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
         self,
         freq: int = 0,
         local_dir: str = "./checkpoints",
-        upload_async: bool = True,
     ) -> "CustomSACConfig":
-        """Store checkpointing preferences for use with :class:`~rlframework.storage.AutoCheckpoint`.
-
-        Call :meth:`~rlframework.config.FrameworkConfigMixin.build_checkpoint_manager`
-        to create the manager, then pass it to ``AutoCheckpoint``::
-
-            mgr = config.build_checkpoint_manager()
-            auto = AutoCheckpoint(mgr, freq=5, local_dir="./ckpts")
-
-            algo = config.build()
-            for i in range(1000):
-                result = algo.train()
-                auto.step(algo, iteration=i + 1, metrics=result)
-        """
-        FrameworkConfigMixin.checkpointing(self, freq=freq, local_dir=local_dir, upload_async=upload_async)
+        """Store checkpointing preferences for use with :class:`~rlframework.storage.AutoCheckpoint`."""
+        self.framework_checkpointing(freq=freq, local_dir=local_dir)
         return self
 
     @override(SACConfig)

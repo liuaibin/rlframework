@@ -33,6 +33,7 @@ from typing import Any
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 
+from rlframework.config import validators
 from rlframework.logging.callbacks import FrameworkCallback
 
 
@@ -66,6 +67,20 @@ class FrameworkConfigMixin:
         self._storage_upload_async: bool = True
         self._best_upload_freq: int = 1         # upload best model every N improvements
 
+    def _validate_framework_config(self) -> None:
+        """Validate framework and training config parameters.
+
+        Called automatically before training starts (in ``_apply_framework_runtime_config``).
+        Raises ``ValidationError`` on any invalid value.
+        """
+        # lr and gamma live in the training section of the config dict.
+        train_cfg = getattr(self, "training", {})
+        if isinstance(train_cfg, dict):
+            if "lr" in train_cfg:
+                validators.validate_lr(train_cfg["lr"], field="training.lr")
+            if "gamma" in train_cfg:
+                validators.validate_gamma(train_cfg["gamma"], field="training.gamma")
+
     # ------------------------------------------------------------------
     # Fluent setters
     # ------------------------------------------------------------------
@@ -93,6 +108,7 @@ class FrameworkConfigMixin:
         Returns:
             This config (for method chaining).
         """
+        validators.validate_backend(backend, ["local", "minio", "s3"])
         self._storage_backend = backend
         self._storage_backend_config = backend_kwargs
         self._storage_configured = True
@@ -135,6 +151,14 @@ class FrameworkConfigMixin:
         Returns:
             This config (for method chaining).
         """
+        validators.validate_non_negative_int(freq, "checkpoint_freq")
+        if not isinstance(local_dir, str) or not local_dir.strip():
+            from rlframework.utils.exceptions import ValidationError
+            raise ValidationError(
+                "checkpoint local_dir must be a non-empty string",
+                field="checkpointing.local_dir",
+                value=local_dir,
+            )
         self._checkpoint_freq = freq
         self._checkpoint_local_dir = local_dir
         return self
@@ -193,6 +217,7 @@ class FrameworkConfigMixin:
 
         Subclasses can override this to add additional wiring.
         """
+        self._validate_framework_config()
         reporters = self.build_reporters()
         ckpt_mgr = self.build_checkpoint_manager()
 
