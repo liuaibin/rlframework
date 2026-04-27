@@ -44,6 +44,36 @@ class TestFrameworkAlgorithmMixin:
 
 
 class TestAlgorithmConfigs:
+    def test_ppo_framework_models_preserves_new_api_model_config(self):
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.models.catalog import PPOCompositeCatalog
+
+        cfg = (
+            CustomPPOConfig()
+            .rl_module(
+                model_config={
+                    "custom_model_config": {
+                        "critic_head": {
+                            "value_scale": 0.5,
+                        }
+                    }
+                }
+            )
+            .framework_models(
+                encoder="enc",
+                actor_head="pi",
+                critic_head="vf",
+            )
+        )
+
+        assert cfg.model_config["_framework_custom_config"] == {
+            "custom_encoder": "enc",
+            "custom_actor_head": "pi",
+            "custom_critic_head": "vf",
+        }
+        assert cfg.model_config["custom_model_config"]["critic_head"]["value_scale"] == 0.5
+        assert cfg._rl_module_spec.catalog_class is PPOCompositeCatalog
+
     def test_sac_framework_models_sets_rl_module_spec(self):
         from rlframework.algorithms.sac import CustomSACConfig
         from rlframework.models.catalog import SACCompositeCatalog
@@ -55,7 +85,7 @@ class TestAlgorithmConfigs:
             q_head="qf",
         )
 
-        assert cfg.model["_framework_custom_config"] == {
+        assert cfg.model_config["_framework_custom_config"] == {
             "custom_encoder": "enc",
             "custom_actor_head": "pi",
             "custom_critic_head": "vf",

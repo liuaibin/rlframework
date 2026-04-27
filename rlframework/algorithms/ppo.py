@@ -21,6 +21,7 @@ from ray.rllib.utils.annotations import override
 from rlframework.algorithms.base import FrameworkAlgorithmMixin
 from rlframework.config.framework_config import FrameworkConfigMixin
 from rlframework.models.catalog import (
+    ComponentRegistry,
     PPOCompositeCatalog,
 )
 
@@ -89,31 +90,47 @@ class CustomPPOConfig(PPOConfig, FrameworkConfigMixin):
         # Build the custom config dict
         custom_config = {}
 
+        def resolve_registered_component(component: Any, getter: Any) -> Any:
+            if isinstance(component, str):
+                return getter(component) or component
+            return component
+
         if encoder and encoder != "default":
-            # 支持 string name 或直接传入 builder 函数
-            custom_config["custom_encoder"] = encoder
+            # Resolve registered names to callables when available so Ray can
+            # serialize them to remote workers.
+            custom_config["custom_encoder"] = resolve_registered_component(
+                encoder,
+                ComponentRegistry.get_encoder,
+            )
 
         if actor_head and actor_head != "default":
-            custom_config["custom_actor_head"] = actor_head
+            custom_config["custom_actor_head"] = resolve_registered_component(
+                actor_head,
+                ComponentRegistry.get_actor_head,
+            )
 
         if critic_head and critic_head != "default":
-            custom_config["custom_critic_head"] = critic_head
+            custom_config["custom_critic_head"] = resolve_registered_component(
+                critic_head,
+                ComponentRegistry.get_critic_head,
+            )
 
         # If we have custom components, configure RLModule to use CompositeCatalog
         if custom_config:
-            # Update model config
-            self.model.update(
-                {
-                    "_framework_custom_config": custom_config,
-                }
-            )
+            # Keep using RLlib's new API stack model_config.  This preserves any
+            # prior `.rl_module(model_config={...})` values while injecting the
+            # component choices consumed by PPOCompositeCatalog.
+            model_config = dict(self.model) | dict(self.model_config)
+            framework_custom_config = dict(model_config.get("_framework_custom_config", {}))
+            framework_custom_config.update(custom_config)
+            model_config["_framework_custom_config"] = framework_custom_config
 
             # Set catalog class to PPOCompositeCatalog
             self.rl_module(
+                model_config=model_config,
                 rl_module_spec=RLModuleSpec(
                     catalog_class=PPOCompositeCatalog,
-                    model_config=self.model,
-                )
+                ),
             )
 
         return self
