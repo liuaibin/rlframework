@@ -3,7 +3,7 @@
 from typing import Any
 
 import numpy as np
-from gymnasium import Env, ObservationWrapper, Wrapper
+from gymnasium import Env, ObservationWrapper, Wrapper, spaces
 
 
 class NormalizeObsWrapper(ObservationWrapper):
@@ -20,6 +20,13 @@ class NormalizeObsWrapper(ObservationWrapper):
         self._mean: np.ndarray | None = None
         self._var: np.ndarray | None = None
         self._count = 0
+        if isinstance(env.observation_space, spaces.Box):
+            self.observation_space = spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=env.observation_space.shape,
+                dtype=np.float32,
+            )
 
     def _update_stats(self, obs: np.ndarray) -> None:
         obs = obs.astype(np.float64, copy=False)
@@ -38,7 +45,7 @@ class NormalizeObsWrapper(ObservationWrapper):
         self._update_stats(obs)
         assert self._mean is not None and self._var is not None
         std = np.sqrt(self._var / max(self._count, 1) + self._epsilon)
-        return (obs - self._mean) / std
+        return ((obs - self._mean) / std).astype(np.float32)
 
 
 class RecordEpisodeStatsWrapper(Wrapper):

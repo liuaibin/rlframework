@@ -1,0 +1,231 @@
+@startuml CustomRLModule_Three_Ways
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 50
+skinparam ranksep 70
+hide empty members
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<Upstream>> #ECEFF1
+    BackgroundColor<<Base>> #E3F2FD
+    BackgroundColor<<Catalog>> #E8F5E9
+    BackgroundColor<<Registry>> #F3E5F5
+    BackgroundColor<<Config>> #FFF3E0
+    BackgroundColor<<Default>> #BBDEFB
+    BackgroundColor<<Example>> #C8E6C9
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title 三种自定义 RLModule 的方式
+
+/' =============================================================================
+    公共底层：Ray RLlib Core
+============================================================================= '/
+
+package "Ray RLlib Core" <<Upstream>> {
+    class RLModule <<abstract>> {
+        +_forward()
+        +_forward_train()
+        +setup()
+    }
+
+    class TorchRLModule <<Upstream>> {
+        framework = "torch"
+    }
+
+    class RLModuleSpec <<Upstream>> {
+        + module_class
+        + catalog_class (optional)
+        + model_config
+    }
+
+    class PPOCatalog <<Upstream>>
+    class SACCatalog <<Upstream>>
+    class DQNCatalog <<Upstream>>
+}
+
+RLModule <|-- TorchRLModule
+
+/' =============================================================================
+    方式一：完全自定义 Custom RLModule
+============================================================================= '/
+
+package "方式一：完全自定义 Custom RLModule" <<Base>> {
+    class CustomTorchRLModule <<abstract>> {
+        +get_initial_state()
+        +_forward()
+    }
+
+    class CustomPPORLModule <<abstract>> {
+        +setup() {must override}
+        +compute_values() {must override}
+    }
+
+    class CustomSACRLModule <<abstract>>
+    class CustomDQNRLModule <<abstract>>
+
+    CustomTorchRLModule <|-- CustomPPORLModule
+    CustomTorchRLModule <|-- CustomSACRLModule
+    CustomTorchRLModule <|-- CustomDQNRLModule
+    TorchRLModule <|-- CustomTorchRLModule
+}
+
+package "方式一：实现示例" <<Example>> {
+    class MinimalPPOModule {
+        +encoder: nn.Sequential
+        +pi_head: nn.Sequential
+        +vf_head: nn.Sequential
+        +setup()
+        +_forward()
+    }
+
+    CustomPPORLModule <|-- MinimalPPOModule
+}
+
+note bottom of MinimalPPOModule
+    === 特点 ===
+    • setup() 中手动构建所有组件
+    • 无需依赖 catalog
+    • 完全掌控 forward 逻辑
+    • 适合：完全重写网络架构
+end note
+
+/' =============================================================================
+    方式二：ComponentRegistry + CompositeCatalog 组合式
+============================================================================= '/
+
+package "方式二：ComponentRegistry 注册中心" <<Registry>> {
+    class ComponentRegistry <<Registry>> {
+        {static} register_encoder(name)
+        {static} register_actor_head(name)
+        {static} register_critic_head(name)
+        {static} register_q_head(name)
+        {static} get_encoder(name)
+        {static} get_actor_head(name)
+        {static} get_critic_head(name)
+    }
+}
+
+package "方式二：CompositeCatalog 适配层" <<Catalog>> {
+    class PPOCompositeCatalog <<Catalog>> {
+        + build_encoder()
+        + build_pi_head()
+        + build_vf_head()
+    }
+
+    class SACCompositeCatalog <<Catalog>>
+    class DQNCompositeCatalog <<Catalog>>
+
+    PPOCatalog <|-- PPOCompositeCatalog
+    SACCatalog <|-- SACCompositeCatalog
+    DQNCatalog <|-- DQNCompositeCatalog
+}
+
+package "方式二：Default RLModule 使用者" <<Default>> {
+    class DefaultPPOTorchRLModule <<Default>> {
+        + encoder
+        + pi
+        + vf
+    }
+
+    class DefaultSACTorchRLModule <<Default>>
+    class DefaultDQNTorchRLModule <<Default>>
+
+    PPOCatalog -- DefaultPPOTorchRLModule
+    SACCatalog -- DefaultSACTorchRLModule
+    DQNCatalog -- DefaultDQNTorchRLModule
+}
+
+note bottom of ComponentRegistry
+    === 特点 ===
+    • 注册自定义组件（encoder/head）
+    • 由 CompositeCatalog 调用
+    • 复用 RLlib 默认 RLModule
+    • 适合：替换部分组件
+end note
+
+/' =============================================================================
+    方式三：继承 + 部分重写
+============================================================================= '/
+
+package "方式三：继承 + 部分重写" <<Base>> {
+    class CustomPPOModule <<Base>> {
+        +setup()
+        +_forward_train()
+    }
+
+    class CustomSACModule <<Base>>
+    class CustomDQNModule <<Base>>
+
+    DefaultPPOTorchRLModule <|-- CustomPPOModule
+    DefaultSACTorchRLModule <|-- CustomSACModule
+    DefaultDQNTorchRLModule <|-- CustomDQNModule
+}
+
+note bottom of CustomPPOModule
+    === 特点 ===
+    • 继承 Default RLModule
+    • 重写特定方法
+    • 可选配合 catalog 使用
+    • 适合：微调、部分逻辑修改
+end note
+
+/' =============================================================================
+    配置层
+============================================================================= '/
+
+package "配置层" <<Config>> {
+    class CustomPPOConfig <<Config>> {
+        +environment()
+        +framework()
+        +training()
+        +rl_module(spec)
+        +framework_models()
+        +build()
+    }
+
+    class CustomSACConfig <<Config>>
+    class CustomDQNConfig <<Config>>
+}
+
+/' =============================================================================
+    使用流程
+============================================================================= '/
+
+CustomPPOConfig --> RLModuleSpec : 创建配置
+RLModuleSpec --> CustomPPORLModule : 方式一
+RLModuleSpec --> DefaultPPOTorchRLModule : 方式二/三
+
+CustomPPOConfig --> ComponentRegistry : 注册组件
+ComponentRegistry --> PPOCompositeCatalog : 查询 builder
+PPOCompositeCatalog --> DefaultPPOTorchRLModule : 构建
+
+/' =============================================================================
+    图例
+============================================================================= '/
+
+legend right
+    | 方式 | 基类 | 特点 | 适用场景 |
+    |------|------|------|----------|
+    | 方式一 | CustomPPORLModule | 完全自定义 setup() | 重写整个网络 |
+    | 方式二 | Default + ComponentRegistry | 注册组件 + catalog | 替换部分组件 |
+    | 方式三 | Default + 继承 | 重写特定方法 | 微调逻辑 |
+endlegend
+
+@enduml

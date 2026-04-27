@@ -44,6 +44,36 @@ class TestFrameworkAlgorithmMixin:
 
 
 class TestAlgorithmConfigs:
+    def test_custom_ppo_rl_module_spec_uses_new_api(self):
+        import importlib.util
+        from pathlib import Path
+
+        import gymnasium as gym
+        import torch
+        from ray.rllib.core.columns import Columns
+        from ray.rllib.core.rl_module.rl_module import RLModuleSpec
+
+        example_path = Path(__file__).resolve().parents[1] / "examples/06_custom_rl_module.py"
+        spec = importlib.util.spec_from_file_location("example_06_custom_rl_module", example_path)
+        assert spec is not None and spec.loader is not None
+        module_file = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module_file)
+
+        module = RLModuleSpec(
+            module_class=module_file.MinimalPPOModule,
+            observation_space=gym.spaces.Box(-1.0, 1.0, shape=(4,)),
+            action_space=gym.spaces.Discrete(2),
+            model_config={"fcnet_hiddens": [16], "fcnet_activation": "relu"},
+        ).build()
+
+        batch = {Columns.OBS: torch.randn(3, 4)}
+        fwd_out = module.forward_train(batch)
+        values = module.compute_values(batch, embeddings=fwd_out[Columns.EMBEDDINGS])
+
+        assert fwd_out[Columns.ACTION_DIST_INPUTS].shape == (3, 2)
+        assert values.shape == (3,)
+        assert hasattr(module, "state_dict")
+
     def test_ppo_framework_models_preserves_new_api_model_config(self):
         from rlframework.algorithms.ppo import CustomPPOConfig
         from rlframework.models.catalog import PPOCompositeCatalog

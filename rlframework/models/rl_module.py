@@ -14,19 +14,19 @@ Usage::
     # Recommended: fully self-contained, no catalog needed
     config = CustomPPOConfig()
     config.rl_module(
+        model_config={...},
         rl_module_spec=RLModuleSpec(
-            rl_module_class=MyFullyCustomPPOModule,
-            model_config_dict={...},
-        )
+            module_class=MyFullyCustomPPOModule,
+        ),
     )
 
     # Advanced: inject catalog for hybrid use (keep some default components)
     config.rl_module(
+        model_config={"_framework_custom_config": {...}},
         rl_module_spec=RLModuleSpec(
-            rl_module_class=MyHybridPPOModule,
+            module_class=MyHybridPPOModule,
             catalog_class=PPOCompositeCatalog,
-            model_config_dict={"_framework_custom_config": {...}},
-        )
+        ),
     )
 
 Available RLModules:
@@ -37,22 +37,20 @@ Available RLModules:
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias, cast
+from typing import Any
 
 import gymnasium as gym
+from ray.rllib.core.rl_module.apis.value_function_api import ValueFunctionAPI
 from ray.rllib.core.rl_module.rl_module import RLModule
+from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
 from ray.rllib.utils.annotations import override
-
-# RLlib versions differ on whether RLModuleState is exported; a plain mapping
-# matches what the custom modules serialize here.
-RLModuleState: TypeAlias = dict[str, Any]
 
 # ----------------------------------------------------------------------
 # Base class for custom RLModules
 # ----------------------------------------------------------------------
 
 
-class CustomTorchRLModule(RLModule):
+class CustomTorchRLModule(TorchRLModule):
     """Base class for custom Torch-based RLModules.
 
     Provides a clean starting point for implementing fully custom modules.
@@ -113,30 +111,13 @@ class CustomTorchRLModule(RLModule):
         """
         return self._forward(batch, **kwargs)
 
-    @override(RLModule)
-    def get_state(self) -> RLModuleState:
-        """Return the state dict for checkpointing.
-
-        Override if you need custom state serialization
-        (e.g., excluding optimizer state).
-        """
-        return {"module_state": cast(Any, self).state_dict()}
-
-    @override(RLModule)
-    def set_state(self, state: RLModuleState) -> None:
-        """Restore from a state dict.
-
-        Override if you need custom state deserialization.
-        """
-        cast(Any, self).load_state_dict(state["module_state"])
-
 
 # ----------------------------------------------------------------------
 # PPO Custom RLModule
 # ----------------------------------------------------------------------
 
 
-class CustomPPORLModule(CustomTorchRLModule):
+class CustomPPORLModule(CustomTorchRLModule, ValueFunctionAPI):
     """Fully custom PPO RLModule.
 
     Use this when you need to:
@@ -189,7 +170,11 @@ class CustomPPORLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
+        inference_only: bool = False,
+        learner_only: bool = False,
         model_config: dict | None = None,
+        catalog_class: type[Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         # Store spaces before calling super().__init__ so setup() can use them
         self._observation_space = observation_space
@@ -199,7 +184,11 @@ class CustomPPORLModule(CustomTorchRLModule):
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
+            inference_only=inference_only,
+            learner_only=learner_only,
             model_config=model_config,
+            catalog_class=catalog_class,
+            **kwargs,
         )
 
     @override(RLModule)
@@ -225,6 +214,14 @@ class CustomPPORLModule(CustomTorchRLModule):
         """
         return ["vf_head"]
 
+    @override(ValueFunctionAPI)
+    def compute_values(self, batch: dict[str, Any], embeddings: Any | None = None) -> Any:
+        """Compute value estimates for PPO losses.
+
+        PPO's new Learner API requires modules to implement ValueFunctionAPI.
+        """
+        raise NotImplementedError("CustomPPORLModule.compute_values() must be implemented.")
+
 
 # ----------------------------------------------------------------------
 # SAC Custom RLModule
@@ -247,7 +244,11 @@ class CustomSACRLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
+        inference_only: bool = False,
+        learner_only: bool = False,
         model_config: dict | None = None,
+        catalog_class: type[Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         self._observation_space = observation_space
         self._action_space = action_space
@@ -256,7 +257,11 @@ class CustomSACRLModule(CustomTorchRLModule):
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
+            inference_only=inference_only,
+            learner_only=learner_only,
             model_config=model_config,
+            catalog_class=catalog_class,
+            **kwargs,
         )
 
     @override(RLModule)
@@ -302,7 +307,11 @@ class CustomDQNRLModule(CustomTorchRLModule):
         self,
         observation_space: gym.Space,
         action_space: gym.Space,
+        inference_only: bool = False,
+        learner_only: bool = False,
         model_config: dict | None = None,
+        catalog_class: type[Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         self._observation_space = observation_space
         self._action_space = action_space
@@ -311,7 +320,11 @@ class CustomDQNRLModule(CustomTorchRLModule):
         super().__init__(
             observation_space=observation_space,
             action_space=action_space,
+            inference_only=inference_only,
+            learner_only=learner_only,
             model_config=model_config,
+            catalog_class=catalog_class,
+            **kwargs,
         )
 
     @override(RLModule)

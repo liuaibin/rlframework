@@ -7,7 +7,7 @@ by subclassing ``rlframework.envs.BaseEnv``:
 - Inherit from ``BaseEnv`` — no boilerplate needed for ``reset/step`` signatures
 - Only implement ``_reset()`` and ``_step()``
 - Optional: override ``_render_rgb_array()`` / ``_render_human()``
-- Register with ``tune.register_env()`` so RLlib workers can instantiate by name
+- Wrap with ``NormalizeObsWrapper`` and ``RecordEpisodeStatsWrapper``
 - Train with CustomPPO
 
 The env: **PointMass2D** — an agent navigates a 2D bounded box to reach a
@@ -15,16 +15,16 @@ random goal.  Observations are [agent_x, agent_y, goal_x, goal_y]; actions
 are 2D velocity commands.
 
 Run:
-    python rlframework/examples/13_custom_env.py
+    python examples/13_custom_env.py
 """
 
 import gymnasium as gym
 import numpy as np
 import ray
-from ray import tune
 
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.envs import BaseEnv
+from rlframework.envs.wrappers import NormalizeObsWrapper, RecordEpisodeStatsWrapper
 
 # ==============================================================================
 # 1. Define your custom env by subclassing BaseEnv
@@ -38,25 +38,37 @@ class PointMass2D(BaseEnv):
     Action space:      Box(-1, 1, shape=(2,))    → [vx, vy] velocity commands
     Reward:            -distance to goal, +10 on success
     Termination:       goal reached or max_episode_steps
+
+    Supports both direct instantiation and RLlib config via env_config.
     """
 
     def __init__(
         self,
+        *args,
         bounds: float = 5.0,
         max_speed: float = 0.5,
         success_threshold: float = 0.3,
+        max_episode_steps: int = 200,
+        **kwargs,
     ):
-        self.bounds = bounds
-        self.max_speed = max_speed
-        self.success_threshold = success_threshold
+        env_config = dict(args[0]) if args and isinstance(args[0], dict) else {}
+        self.bounds = float(env_config.get("bounds", bounds))
+        self.max_speed = float(env_config.get("max_speed", max_speed))
+        self.success_threshold = float(env_config.get("success_threshold", success_threshold))
+        self.max_episode_steps = int(env_config.get("max_episode_steps", max_episode_steps))
 
-        obs_space = gym.spaces.Box(low=-bounds, high=bounds, shape=(4,), dtype=np.float32)
+        obs_space = gym.spaces.Box(
+            low=-self.bounds,
+            high=self.bounds,
+            shape=(4,),
+            dtype=np.float32,
+        )
         act_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         super().__init__(
             observation_space=obs_space,
             action_space=act_space,
-            max_episode_steps=200,
+            max_episode_steps=self.max_episode_steps,
         )
 
         self._agent_pos: np.ndarray = np.zeros(2, dtype=np.float32)
@@ -147,22 +159,29 @@ class PointMass2D(BaseEnv):
 
 
 # ==============================================================================
-# 2. Register with tune so RLlib workers can find the env by name
+# 2. Helper: wrapped PointMass2D class with useful wrappers
 # ==============================================================================
 
 
-def make_pointmass_env(config=None):
-    return PointMass2D(
-        bounds=config.get("bounds", 5.0),
-        max_speed=config.get("max_speed", 0.5),
-        success_threshold=config.get("success_threshold", 0.3),
-    )
+class PointMass2DWithWrappers(gym.Wrapper):
+    """PointMass2D wrapped with RecordEpisodeStatsWrapper and NormalizeObsWrapper."""
+
+    def __init__(self, *args, **kwargs):
+        # Handle RLlib env_ctx if passed as first arg
+        if args and isinstance(args[0], dict):
+            env_config = dict(args[0])
+            env_config.update(kwargs)
+            kwargs = env_config
+            args = args[1:]
+        base_env = PointMass2D(*args, **kwargs)
+        base_env = RecordEpisodeStatsWrapper(base_env)
+        base_env = NormalizeObsWrapper(base_env)
+        super().__init__(base_env)
 
 
-tune.register_env("PointMass2D-v0", make_pointmass_env)
-
-# Register with gymnasium so gym.make("PointMass2D-v0") works (sanity_check).
-gym.register(id="PointMass2D-v0", entry_point=PointMass2D, max_episode_steps=200)
+def make_wrapped_env(bounds: float = 5.0, max_speed: float = 0.5, **kwargs):
+    """Create a wrapped PointMass2D for standalone use."""
+    return PointMass2DWithWrappers(bounds=bounds, max_speed=max_speed, **kwargs)
 
 
 # ==============================================================================
@@ -171,12 +190,12 @@ gym.register(id="PointMass2D-v0", entry_point=PointMass2D, max_episode_steps=200
 
 
 def sanity_check():
-    """Random policy — verify env logic without RLlib."""
+    """Random policy — verify env logic with wrappers."""
     print("=" * 60)
-    print("Sanity-check: PointMass2D-v0 with random policy")
+    print("Sanity-check: PointMass2D with wrappers")
     print("=" * 60)
 
-    env = gym.make("PointMass2D-v0", bounds=5.0, max_speed=0.5)
+    env = make_wrapped_env(bounds=5.0, max_speed=0.5)
     print(f"  obs_space: {env.observation_space}")
     print(f"  act_space: {env.action_space}")
 
@@ -208,14 +227,22 @@ def sanity_check():
 
 def train():
     print("\n" + "=" * 60)
-    print("Training: CustomPPO on PointMass2D-v0")
+    print("Training: CustomPPO on PointMass2D (with wrappers)")
     print("=" * 60)
 
     ray.init(ignore_reinit_error=True)
 
     config = (
         CustomPPOConfig()
-        .environment("PointMass2D-v0")
+        .environment(
+            env=PointMass2DWithWrappers,
+            env_config={
+                "bounds": 5.0,
+                "max_speed": 0.5,
+                "success_threshold": 0.3,
+                "max_episode_steps": 200,
+            },
+        )
         .training(
             lr=3e-4,
             train_batch_size=2000,

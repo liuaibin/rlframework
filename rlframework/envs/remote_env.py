@@ -22,9 +22,9 @@ Subclass this to implement a custom remote env (HTTP, gRPC, Unix socket, etc.)::
         def _send_close(self):
             requests.post(f"{self._url}/close")
 
-Then register::
+Then configure with RLlib::
 
-    tune.register_env("MyHTTPEnv-v0", lambda cfg: HTTPEnv(url="http://localhost:8000"))
+    config = CustomPPOConfig().environment(env=HTTPEnv, env_config={"url": "http://localhost:8000"})
 """
 
 from __future__ import annotations

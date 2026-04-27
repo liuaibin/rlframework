@@ -1,0 +1,224 @@
+@startuml EnvModule_Architecture
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 50
+skinparam ranksep 70
+hide empty members
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<Upstream>> #ECEFF1
+    BackgroundColor<<Framework>> #E3F2FD
+    BackgroundColor<<Core>> #E8F5E9
+    BackgroundColor<<Wrapper>> #F3E5F5
+    BackgroundColor<<Usage>> #FFF3E0
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title rlframework.envs 模块架构
+
+/' =============================================================================
+    Upstream：Gymnasium Foundation
+============================================================================= '/
+
+package "Gymnasium Core" <<Upstream>> {
+    class "gymnasium.Env" as GymEnv <<abstract>> {
+        +reset(seed?, options?) -> (obs, info)
+        +step(action) -> (obs, reward, term, trunc, info)
+        +close()
+        +render()
+    }
+
+    class "gymnasium.ObservationWrapper" as ObsWrapper <<Upstream>>
+    class "gymnasium.Wrapper" as GymWrapper <<Upstream>>
+    class "gymnasium.core.RenderFrame" as RenderFrame <<Upstream>>
+}
+
+GymEnv <|-- ObsWrapper
+GymEnv <|-- GymWrapper
+
+/' =============================================================================
+    rlframework.envs Core
+============================================================================= '/
+
+package "rlframework.envs" <<Core>> {
+    class BaseEnv <<Core>> {
+        -_max_episode_steps: int
+        -_elapsed_steps: int
+        -_window: Any
+        +render_mode: str | None
+        +observation_space: gym.Space
+        +action_space: gym.Space
+        --
+        +reset(seed?, options?) -> (obs, info)
+        +step(action) -> (obs, reward, term, trunc, info)
+        +close()
+        +render() -> RenderFrame | None
+        +seed(seed?) -> list[int]
+        --
+        #_reset(seed?, options?) -> (obs, info) {abstract}
+        #_step(action) -> (obs, reward, term, trunc, info) {abstract}
+        #_render_rgb_array() -> np.ndarray | None
+        #_render_human()
+    }
+
+    class RemoteEnv <<Core>> {
+        -_elapsed_steps: int
+        +render_mode: str | None
+        +observation_space: gym.Space
+        +action_space: gym.Space
+        --
+        +reset(seed?, options?) -> (obs, info)
+        +step(action) -> (obs, reward, term, trunc, info)
+        +close()
+        --
+        #_send_reset(seed?, options?) -> (obs, info) {abstract}
+        #_send_step(action) -> (obs, reward, term, trunc, info) {abstract}
+        #_send_close()
+    }
+
+    note bottom of BaseEnv
+        === 特点 ===
+        • 封装 Gymnasium 标准接口
+        • _reset / _step 为抽象方法
+        • 内置 TimeLimit truncation
+        • 可选 pygame 渲染支持
+    end note
+
+    note bottom of RemoteEnv
+        === 特点 ===
+        • 远程环境抽象基类
+        • _send_reset / _send_step / _send_close 为抽象方法
+        • 支持 HTTP / gRPC / Unix Socket 等协议
+        • 自动处理 numpy 类型转换
+    end note
+
+    note right of RemoteEnv
+        === 使用场景 ===
+        • RL 训练服务分离部署
+        • 并行仿真环境集群
+        • 多语言环境实现（Python/C++/Rust...）
+    end note
+}
+
+GymEnv <|-- BaseEnv
+GymEnv <|-- RemoteEnv
+
+/' =============================================================================
+    rlframework.envs.wrappers
+============================================================================= '/
+
+package "rlframework.envs.wrappers" <<Wrapper>> {
+    class NormalizeObsWrapper <<Wrapper>> {
+        -_epsilon: float
+        -_mean: np.ndarray | None
+        -_var: np.ndarray | None
+        -_count: int
+        --
+        +observation(obs) -> np.ndarray
+        #_update_stats(obs)
+    }
+
+    class RecordEpisodeStatsWrapper <<Wrapper>> {
+        -_episode_return: float
+        -_episode_length: int
+        --
+        +reset(**kwargs)
+        +step(action) -> info 含 episode_return / episode_length
+    }
+
+    note bottom of NormalizeObsWrapper
+        === 特点 ===
+        • 观测值零均值 / 单位方差归一化
+        • 使用 Welford 算法增量更新均值/方差
+        • 注入 episode 统计到 info
+    end note
+
+    note bottom of RecordEpisodeStatsWrapper
+        === 特点 ===
+        • 追踪单个 episode 的累计 return 和 length
+        • episode 结束时写入 info dict
+        • 兼容所有 gymnasium.Env
+    end note
+}
+
+ObsWrapper <|-- NormalizeObsWrapper
+GymWrapper <|-- RecordEpisodeStatsWrapper
+
+/' =============================================================================
+    组合使用
+============================================================================= '/
+
+package "组合示例" <<Usage>> {
+    class CartPoleBaseEnv <<Usage>> {
+        #_reset(seed?, options?) -> (obs, info)
+        #_step(action) -> (obs, reward, term, trunc, info)
+    }
+
+    class HTTPEnv <<Usage>> {
+        -_url: str
+        #_send_reset(seed?, options?) -> (obs, info)
+        #_send_step(action) -> (obs, reward, term, trunc, info)
+        #_send_close()
+    }
+
+    class WrappedEnv <<Usage>> {
+        +env: Env
+    }
+
+    BaseEnv <|-- CartPoleBaseEnv
+    RemoteEnv <|-- HTTPEnv
+
+    BaseEnv <|-- WrappedEnv
+    NormalizeObsWrapper o-- WrappedEnv : env
+    RecordEpisodeStatsWrapper o-- WrappedEnv : env
+
+    note bottom of WrappedEnv
+        === 典型组合 ===
+        env = RecordEpisodeStatsWrapper(NormalizeObsWrapper(CartPoleBaseEnv()))
+        config.environment(env=CartPoleBaseEnv, env_config={...})
+    end note
+}
+
+/' =============================================================================
+    注册到 RLlib
+============================================================================= '/
+
+package "RLlib 配置" <<Usage>> {
+    class "Config.environment()" as EnvConfig <<Usage>>
+    class "ray.tune.Trainable" as Trainable <<Usage>>
+}
+
+BaseEnv ..> EnvConfig : .environment(env=YourEnvClass)
+RemoteEnv ..> EnvConfig : .environment(env=YourEnvClass)
+EnvConfig ..> Trainable : 驱动训练循环
+
+/' =============================================================================
+    图例
+============================================================================= '/
+
+legend right
+    | 层级 | 说明 | 颜色 |
+    |------|------|------|
+    | Upstream | Gymnasium 底层 | 灰蓝 |
+    | Core | rlframework 核心 | 浅绿 |
+    | Wrapper | 组合工具 | 浅紫 |
+    | Usage | 使用示例 | 浅橙 |
+endlegend
+
+@enduml

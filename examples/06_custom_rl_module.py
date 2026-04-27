@@ -5,13 +5,15 @@ control over the forward pass and training logic, beyond what Catalog
 component substitution can provide.
 
 Run:
-    python rlframework/examples/06_custom_rl_module.py
+    python examples/06_custom_rl_module.py
 """
 
 import numpy as np
 import ray
 import torch
 import torch.nn as nn
+from ray.rllib.core import DEFAULT_MODULE_ID
+from ray.rllib.core.columns import Columns
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.utils.annotations import override
 
@@ -66,6 +68,13 @@ class MinimalPPOModule(CustomPPORLModule):
             layers.append(output_activation)
         return nn.Sequential(*layers)
 
+    def _encode(self, batch):
+        obs = batch[Columns.OBS]
+        if not isinstance(obs, torch.Tensor):
+            obs = torch.from_numpy(obs)
+        obs = obs.float()
+        return self.encoder(obs.reshape(obs.shape[0], -1))
+
     @override(CustomPPORLModule)
     def setup(self):
         model_config = self._model_config or {}
@@ -80,19 +89,24 @@ class MinimalPPOModule(CustomPPORLModule):
 
     @override(CustomPPORLModule)
     def _forward(self, batch, **kwargs):
-        obs = batch["obs"]
-        if not isinstance(obs, torch.Tensor):
-            obs = torch.from_numpy(obs).float()
-        h = self.encoder(obs)
+        h = self._encode(batch)
         action_logits = self.pi_head(h)
         return {
-            "action_dist_inputs": action_logits,
-            "vf_preds": self.vf_head(h).squeeze(-1),
+            Columns.ACTION_DIST_INPUTS: action_logits,
         }
 
     @override(CustomPPORLModule)
     def _forward_train(self, batch, **kwargs):
-        return self._forward(batch, **kwargs)
+        h = self._encode(batch)
+        return {
+            Columns.ACTION_DIST_INPUTS: self.pi_head(h),
+            Columns.EMBEDDINGS: h,
+        }
+
+    @override(CustomPPORLModule)
+    def compute_values(self, batch, embeddings=None):
+        h = embeddings if embeddings is not None else self._encode(batch)
+        return self.vf_head(h).squeeze(-1)
 
 
 # =============================================================================
@@ -116,33 +130,49 @@ def main():
         )
         .env_runners(num_env_runners=1)
         .rl_module(
+            model_config={
+                "fcnet_hiddens": [256, 256],
+                "fcnet_activation": "relu",
+            },
             rl_module_spec=RLModuleSpec(
-                rl_module_class=MinimalPPOModule,
+                module_class=MinimalPPOModule,
                 # catalog_class is omitted — MinimalPPOModule is fully self-contained
-                model_config_dict={
-                    "fcnet_hiddens": [256, 256],
-                    "fcnet_activation": "relu",
-                },
-            )
+            ),
         )
     )
 
     print("Building algorithm with custom RLModule...")
     algo = config.build()
 
-    module = algo.get_module()
+    def get_local_learner_module(algo):
+        """Return the learner module when the learner runs in this process."""
+        learner_group = getattr(algo, "learner_group", None)
+        if learner_group is None or not getattr(learner_group, "is_local", False):
+            return None
+
+        module = learner_group._learner.module
+        return module.get(DEFAULT_MODULE_ID) if hasattr(module, "get") else module
+
+    learner_module = get_local_learner_module(algo)
+    module = learner_module or algo.get_module()
     print(f"\nModule type: {type(module).__name__}")
+    print(f"  - Inspecting {'learner' if learner_module is not None else 'env-runner'} module")
     print(f"  - Encoder: {type(module.encoder).__name__}")
     print(f"  - Pi head: {type(module.pi_head).__name__}")
     print(f"  - VF head: {type(module.vf_head).__name__}")
 
     # Check forward pass
     obs = torch.randn(4, 4)
-    batch = {"obs": obs}
-    fwd_out = module(batch)
+    batch = {Columns.OBS: obs}
+    fwd_out = (
+        module.forward_exploration(batch)
+        if getattr(module, "inference_only", False)
+        else module.forward_train(batch)
+    )
+    values = module.compute_values(batch, embeddings=fwd_out.get(Columns.EMBEDDINGS))
     print(f"\nForward pass output keys: {list(fwd_out.keys())}")
-    print(f"  action_logits shape: {fwd_out['action_dist_inputs'].shape}")
-    print(f"  vf_preds shape:     {fwd_out['vf_preds'].shape}")
+    print(f"  action_logits shape: {fwd_out[Columns.ACTION_DIST_INPUTS].shape}")
+    print(f"  values shape:        {values.shape}")
 
     print("\nTraining for 5 iterations...")
     for i in range(5):

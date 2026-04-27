@@ -490,7 +490,7 @@ RemoteEnv --|> GymEnv
 UserEnv --|> BaseEnv
 NormalizeObsWrapper ..> GymEnv : 包装
 RecordEpisodeStatsWrapper ..> GymEnv : 包装
-UserScript ..> UserEnv : tune.register_env(...) 注册
+UserScript ..> UserEnv : config.environment(env=UserEnv, env_config={...})
 RLLibPPO ..> GymEnv : EnvRunner 采样
 RLLibSAC ..> GymEnv : EnvRunner 采样
 

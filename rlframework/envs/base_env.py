@@ -20,9 +20,9 @@ Subclass this to implement a custom RL environment without boilerplate::
             # ... return obs, reward, terminated, truncated, info
             return obs, reward, terminated, truncated, info
 
-Then register with RLlib::
+Then configure with RLlib::
 
-    tune.register_env("MyEnv-v0", lambda cfg: MyEnv())
+    config = CustomPPOConfig().environment(env=MyEnv)
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ class BaseEnv(gym.Env):
         observation_space: gym.Space,
         action_space: gym.Space,
         max_episode_steps: int | None = None,
+        *args: Any,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -67,6 +68,12 @@ class BaseEnv(gym.Env):
         self._elapsed_steps = 0
         self.render_mode = None
         self._window = None
+
+        if args and len(args) > 0 and hasattr(args[0], "config"):
+            env_ctx = args[0]
+            self.config = env_ctx.config
+        else:
+            self.config = {}
 
     # ------------------------------------------------------------------
     # Public Gymnasium API — delegates to abstract methods
