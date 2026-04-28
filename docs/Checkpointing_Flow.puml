@@ -1,0 +1,292 @@
+@startuml Checkpointing_Flow
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 50
+skinparam ranksep 80
+hide empty members
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<Callback>> #FFE082
+    BackgroundColor<<Storage>> #D1C4E9
+    BackgroundColor<<Backend>> #B2EBF2
+    BackgroundColor<<Trigger>> #F5F5F5
+    BackgroundColor<<External>> #FFCDD2
+    BackgroundColor<<RLlib>> #C8E6C9
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title Checkpoint 保存与最优模型更新流程
+
+/' =============================================================================
+    RLlib 回调触发点
+============================================================================= '/
+
+package "RLlib 回调触发点" <<Trigger>> {
+    class "RLlib\non_train_result" as RLLibOnTrain <<RLlib>> {
+        + result: dict
+        + algorithm
+        + iteration
+    }
+
+    class "RLlib\non_evaluate_end" as RLLibOnEval <<RLlib>> {
+        + evaluation_metrics: dict
+        + algorithm
+    }
+}
+
+/' =============================================================================
+    FrameworkCallback — 两条核心路径
+============================================================================= '/
+
+package "FrameworkCallback" <<Callback>> {
+
+    class "FrameworkCallback\n<<Callback>>" as FC <<Callback>> {
+
+        -- 配置字段 --
+
+        + _ckpt_freq: int = 0
+        + _ckpt_local_dir: str
+        + _best_local_dir: str
+        + _best_upload_freq: int = 1
+
+        -- 状态字段 --
+
+        + _best_reward: float = -inf
+        + _best_improvement_count: int = 0
+        + _ckpt_manager: CheckpointManager
+
+        -- RLlib 回调方法 --
+
+        + on_train_result(result, algorithm, ...)
+        + on_evaluate_end(evaluation_metrics, algorithm, ...)
+
+        -- 指标上报 --
+
+        + _extract_metrics(result): dict
+        + _extract_eval_metrics(evaluation_metrics): dict
+        + _fan_out(metrics, iteration, phase)
+    }
+
+    package "_save_periodic_checkpoint" <<Callback>> {
+
+        class "PeriodicCheckpointPath" as PCP <<Callback>> {
+            + 检查: _ckpt_freq > 0
+            + 检查: iteration % _ckpt_freq == 0
+            + 构造: ckpt_name = "iter_{iteration:06d}"
+            + 调用: algorithm.save_to_path(ckpt_path)
+            + 目标: {checkpoint_local_dir}/iter_XXXXXX/
+        }
+    }
+
+    package "_update_best_model_if_improved" <<Callback>> {
+
+        class "BestModelPath" as BMP <<Callback>> {
+            + 提取: eval/episode_return_mean
+            + 比较: eval_return > _best_reward
+            + 更新: _best_reward = eval_return
+            + 递增: _best_improvement_count += 1
+            + 调用: algorithm.save_to_path(_best_local_dir)
+            + 目标: {best_local_dir}/best/
+            --
+            + 条件: _ckpt_manager != None
+            + 条件: _best_upload_freq > 0
+            + 条件: _best_improvement_count % _best_upload_freq == 0
+            + 调用: _ckpt_manager.upload(local_path, "best.tar")
+        }
+    }
+
+    PCP ..> Algo : save_to_path() — 完整算法状态
+    BMP ..> Algo : save_to_path() — 完整算法状态
+
+    FC --> PCP : on_train_result 调用
+    FC --> BMP : on_evaluate_end 调用
+}
+
+note bottom of FC
+    === 两条独立路径 ===
+    _save_periodic_checkpoint:
+      由 on_train_result 触发
+      每 _ckpt_freq 次迭代保存一次
+      仅保存到本地，不上传远程
+
+    _update_best_model_if_improved:
+      由 on_evaluate_end 触发 (需启用 evaluation)
+      eval reward 超过历史最优时保存
+      每 _best_upload_freq 次改进上传一次 best.tar
+end note
+
+/' =============================================================================
+    CheckpointManager — 上传编排
+============================================================================= '/
+
+package "CheckpointManager" <<Storage>> {
+
+    class "CheckpointManager\n<<Storage>>" as CM <<Storage>> {
+        + _backend: BaseBackend
+        + _upload_async: bool = True
+        + _upload_workers: int = 2
+        + _retries: int = 3
+        --
+        + upload(local_path, remote_name, async_mode): Future | str
+        + upload_sync(local_path, remote_name): str
+        + download(remote_name, local_path): str
+        --
+        + _get_executor(): ThreadPoolExecutor
+        + _upload_with_retry(local_path, remote_name): str
+        + _normalize_remote_name(local_path, remote_name): str
+        + _fsync(path)
+    }
+
+    package "_upload_with_retry" <<Storage>> {
+
+        class "UploadFlow" as UF <<Storage>> {
+            + 判断: os.path.isdir(local_path)
+            + 目录: shutil.make_archive(tar_path, "tar", local_dir)
+            + 调用: _fsync(upload_path)
+            + 循环: for attempt in range(1, _retries + 1)
+            + 调用: _backend.upload(upload_path, remote_name)
+            + 失败: time.sleep(attempt) 后重试
+            + 成功: return result
+            + 清理: os.remove(tmp_tar)
+        }
+    }
+
+    CM --> UF : 委托上传流程
+}
+
+note bottom of CM
+    === 目录上传自动处理 ===
+    目录 → 自动打成 .tar 归档
+    async=True → ThreadPoolExecutor 后台上传
+    async=False → 同步阻塞上传
+    上传失败 → 按 _retries 次数重试
+end note
+
+/' =============================================================================
+    BaseBackend — 存储抽象
+============================================================================= '/
+
+package "BaseBackend 抽象层" <<Backend>> {
+
+    abstract class "BaseBackend\n<<Backend>>" as BB <<Backend>> {
+        + upload(local_path, remote_name)
+        + download(remote_name, local_path)
+    }
+
+    class "LocalBackend\n<<Backend>>" as LB <<Backend>> {
+        + root: str
+    }
+
+    class "MinIOBackend\n<<Backend>>" as MIO <<Backend>> {
+        + endpoint: str
+        + bucket: str
+        + secure: bool
+    }
+
+    class "S3Backend\n<<Backend>>" as S3B <<Backend>> {
+        + bucket: str
+        + prefix: str
+        + region_name: str
+    }
+
+    class "get_backend()\n后端注册表" as BF <<Backend>> {
+        + local  → LocalBackend
+        + minio  → MinIOBackend
+        + s3     → S3Backend
+    }
+}
+
+BB <|-- LB
+BB <|-- MIO
+BB <|-- S3B
+BF ..> BB : 根据名称创建
+
+/' =============================================================================
+    RLlib Algorithm
+============================================================================= '/
+
+package "RLlib Algorithm" <<RLlib>> {
+    class "Algorithm\n(PPO / SAC)" as Algo <<RLlib>> {
+        + training_iteration: int
+        --
+        + save_to_path(path): str
+          — 保存完整算法状态
+          — 包括所有 RLModule (模型权重)
+          — 包括 Learner 状态
+          — 包括 ReplayBuffer (如有)
+        + restore_from_path(path)
+    }
+}
+
+note bottom of Algo
+    === save_to_path() 保存内容 ===
+    RLlib 原生 checkpoint 格式（PyArrow / Table 格式）：
+    • 算法配置 (config)
+    • 所有 RLModule 的模型权重 (Policy weights)
+    • Learner 优化器状态
+    • ReplayBuffer 数据（off-policy 算法）
+    • EnvRunner 状态
+
+    保存为目录，可直接 restore_from_path() 恢复训练。
+    CheckpointManager 会自动打包成 .tar 上传。
+end note
+
+/' =============================================================================
+    外部存储
+============================================================================= '/
+
+package "外部存储" <<External>> {
+    class "本地文件系统\n./checkpoints/" as LocalFS <<External>>
+    class "远程后端\n(MinIO / S3)" as RemoteStorage <<External>>
+}
+
+/' =============================================================================
+    调用关系
+============================================================================= '/
+
+RLLibOnTrain --> FC : 每次训练迭代结束
+RLLibOnEval --> FC : 每次评估结束
+
+BMP ..> CM : upload(local_path, "best.tar")
+
+CM ..> BB : _backend.upload()
+
+UF ..> LocalFS : _fsync()
+UF ..> RemoteStorage : _backend.upload()
+
+LB ..> LocalFS
+MIO ..> RemoteStorage
+S3B ..> RemoteStorage
+
+/' =============================================================================
+    图例
+============================================================================= '/
+
+legend right
+    | 路径 | 触发时机 | 保存内容 | 保存位置 | 上传远程 |
+    |------|----------|----------|----------|----------|
+    | _save_periodic_checkpoint | on_train_result | 算法完整状态 | _ckpt_local_dir/iter_XXXXXX/ | 否 |
+    | _update_best_model_if_improved | on_evaluate_end | 算法完整状态 | _best_local_dir/best/ | 是 (按 _best_upload_freq) |
+endlegend
+
+footer
+framework_callback.py · checkpoint_manager.py · storage/backends/*.py
+endfooter
+
+@enduml

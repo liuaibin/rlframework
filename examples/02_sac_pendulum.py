@@ -63,12 +63,11 @@ config = (
         alpha_lr=3e-4,
         train_batch_size=256,
         replay_buffer_config={
-            "type": "MultiAgentReplayBuffer",
+            "type": "EpisodeReplayBuffer",
             "capacity": 100_000,
         },
         target_entropy="auto",
         tau=0.005,
-        target_update_interval=1,
     )
     .env_runners(num_env_runners=1, rollout_fragment_length=1)
     .evaluation(evaluation_interval=20)

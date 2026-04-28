@@ -1,0 +1,212 @@
+@startuml Reporters_Callback_Flow
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 50
+skinparam ranksep 70
+hide empty members
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<Reporter>> #E3F2FD
+    BackgroundColor<<Callback>> #E8F5E9
+    BackgroundColor<<Config>> #FFF3E0
+    BackgroundColor<<Base>> #FCE4EC
+    BackgroundColor<<RLlib>> #ECEFF1
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title Reporters & Callback 架构流程
+
+/' =============================================================================
+    Layer 1: User Configuration
+============================================================================= '/
+
+package "用户配置层" <<Config>> {
+    class "examples/01_ppo_cartpole.py" as Example <<Config>> {
+        {field} reporters = [FileReporter(...)]
+    }
+
+    note bottom of Example
+        reporters = [FileReporter(filepath="./logs/...")]
+        config.callbacks(FrameworkCallback.with_reporters(reporters))
+    end note
+}
+
+/' =============================================================================
+    Layer 2: Base Classes
+============================================================================= '/
+
+package "Reporters 基类" <<Base>> {
+    abstract class BaseReporter <<Base>> {
+        {abstract} +report(metrics, iteration, phase)
+        +close()
+    }
+}
+
+/' =============================================================================
+    Layer 3: Concrete Reporters
+============================================================================= '/
+
+package "具体 Reporters" <<Reporter>> {
+    class FileReporter <<Reporter>> {
+        -_filepath: str
+        -_fh: TextIO
+        +report(metrics, iteration, phase)
+        +close()
+    }
+
+    class InfluxDBReporter <<Reporter>> {
+        -_url: str
+        -_org, _bucket, _token
+        +report(metrics, iteration, phase)
+    }
+
+    class PrometheusReporter <<Reporter>> {
+        -_gateway: str
+        -_job: str
+        +report(metrics, iteration, phase)
+    }
+
+    BaseReporter <|-- FileReporter
+    BaseReporter <|-- InfluxDBReporter
+    BaseReporter <|-- PrometheusReporter
+}
+
+note bottom of FileReporter
+    === 输出格式 ===
+    {"timestamp": ..., "iteration": N, "phase": "train", ...metrics}
+end note
+
+note bottom of InfluxDBReporter
+    === 协议 ===
+    InfluxDB Line Protocol
+    写入 /api/v2/write
+end note
+
+note bottom of PrometheusReporter
+    === 推送方式 ===
+    Prometheus Push Gateway
+end note
+
+/' =============================================================================
+    Layer 4: FrameworkCallback
+============================================================================= '/
+
+package "FrameworkCallback" <<Callback>> {
+    class FrameworkCallback <<Callback>> {
+        -_reporters: list[BaseReporter]
+        -_collect_resource: bool
+        --
+        +on_train_result(result, algorithm, ...)
+        +on_evaluate_end(algorithm, evaluation_metrics, ...)
+        --
+        +with_reporters(reporters, **kwargs)
+    }
+
+    note bottom of FrameworkCallback
+        === 关键流程 ===
+        1. on_train_result → _extract_metrics → _fan_out (phase="train")
+        2. on_evaluate_end → _extract_eval_metrics → _fan_out (phase="eval")
+    end note
+}
+
+FrameworkCallback --> BaseReporter : 持有 _reporters[]
+
+/' =============================================================================
+    Layer 5: RLlib Core
+============================================================================= '/
+
+package "Ray RLlib Core" <<RLlib>> {
+    class RLlibCallback <<RLlib>> {
+        {abstract} +on_train_result(...)
+        {abstract} +on_evaluate_end(...)
+    }
+
+    class Algorithm <<RLlib>> {
+        +train() → result
+    }
+
+    note bottom of Algorithm
+        每次 train() 结束后触发 on_train_result
+        每次 evaluation 结束后触发 on_evaluate_end
+    end note
+}
+
+RLlibCallback <|-- FrameworkCallback
+Algorithm --> RLlibCallback : 调用回调
+
+/' =============================================================================
+    流程连线
+============================================================================= '/
+
+Example --> FileReporter : 1. 创建 reporters
+Example --> FrameworkCallback : 2. with_reporters(reporters)
+FrameworkCallback --> FileReporter : 3. _fan_out() 遍历调用
+
+/' =============================================================================
+    _fan_out 细节
+============================================================================= '/
+
+package "_fan_out 内部流程" <<Callback>> #LightBlue {
+    class "_fan_out(metrics, iteration, phase)" as FanOut <<Callback>> {
+        for reporter in _reporters:
+            reporter.report(metrics, iteration, phase)
+    }
+}
+
+note right of FanOut
+    === 异常处理 ===
+    单个 reporter 失败不影响其他 reporter
+    logger.warning 记录失败
+end note
+
+/' =============================================================================
+    Metrics 提取流程
+============================================================================= '/
+
+package "Metrics 提取" <<Callback>> {
+    class "_extract_metrics(result)" as ExtractTrain {
+        training_iteration, time_total_s
+        env_runners: episode_return_mean
+        learner_results: learner/<module_id>/<k>
+    }
+
+    class "_extract_eval_metrics(eval_metrics)" as ExtractEval {
+        eval/episode_return_mean
+        eval/episode_len_mean
+        eval/<key> for all floats
+    }
+}
+
+ExtractTrain -[#red,dashed]-> FanOut : train phase
+ExtractEval -[#green,dashed]-> FanOut : eval phase
+
+/' =============================================================================
+    图例
+============================================================================= '/
+
+legend right
+    | 组件 | 职责 | 触发时机 |
+    |------|------|----------|
+    | FileReporter | 写 JSONL 文件 | 每 train/eval 结束时 |
+    | InfluxDBReporter | 写入 InfluxDB | 每 train/eval 结束时 |
+    | PrometheusReporter | 推送到 PushGateway | 每 train/eval 结束时 |
+    | FrameworkCallback | 协调 reporters | RLlib 回调 |
+endlegend
+
+@enduml

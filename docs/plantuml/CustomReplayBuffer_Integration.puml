@@ -1,0 +1,141 @@
+@startuml CustomReplayBuffer_Integration
+!theme plain
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam classAttributeIconSize 0
+skinparam nodesep 40
+skinparam ranksep 60
+hide empty members
+
+skinparam package {
+    BorderColor #455A64
+    FontStyle bold
+}
+
+skinparam class {
+    BorderColor #424242
+    BackgroundColor #FAFAFA
+    BackgroundColor<<Upstream>> #ECEFF1
+    BackgroundColor<<Base>> #E3F2FD
+    BackgroundColor<<Config>> #FFF3E0
+    BackgroundColor<<Override>> #FFCDD2
+}
+
+skinparam note {
+    BackgroundColor #FFFDE7
+    BorderColor #F9A825
+    FontSize 10
+}
+
+title 自定义 Replay Buffer 集成流程
+
+/' =============================================================================
+    Ray RLlib 核心 Replay Buffer 类继承链
+============================================================================= '/
+
+package "Ray RLlib Core" <<Upstream>> {
+    class ReplayBuffer {
+        + add()
+        + sample()
+    }
+
+    class EpisodeReplayBuffer {
+        + episodes
+    }
+
+    class PrioritizedEpisodeReplayBuffer {
+        + _sum_segment
+        + _min_segment
+        + alpha, beta
+    }
+
+    class SumSegmentTree {
+        + O(log n) operations
+    }
+
+    ReplayBuffer <|-- EpisodeReplayBuffer
+    EpisodeReplayBuffer <|-- PrioritizedEpisodeReplayBuffer
+    PrioritizedEpisodeReplayBuffer o-- SumSegmentTree
+}
+
+/' =============================================================================
+    核心1: 自定义 ReplayBuffer 继承 RLlib
+============================================================================= '/
+
+package "核心1: 继承 RLlib Buffer" <<Base>> {
+    class PrioritizedSumTreeBuffer <<Base>> {
+        + _epsilon
+        + _beta_override
+        + sum_tree
+    }
+
+    PrioritizedEpisodeReplayBuffer <|-- PrioritizedSumTreeBuffer
+}
+
+note bottom of PrioritizedSumTreeBuffer
+    继承 PrioritizedEpisodeReplayBuffer
+    替换内部 SumTree 实现
+    O(log n) 采样和优先级更新
+end note
+
+/' =============================================================================
+    核心2: CustomSACConfig 重写 validate()
+============================================================================= '/
+
+package "核心2: 重写 validate() 绕过白名单" <<Override>> {
+    class CustomSACConfig <<Config>> {
+        + replay_buffer_config
+        --
+        + validate()
+    }
+
+    class SACConfig <<Upstream>> {
+        + validate() {会检查白名单}
+    }
+
+    SACConfig <|-- CustomSACConfig
+}
+
+note bottom of CustomSACConfig
+    === 重写原因 ===
+    SACConfig.validate() 有硬编码白名单
+    只允许 4 种内置 Buffer 类型
+    自定义 Buffer 会被拒绝
+
+    === 解决方案 ===
+    捕获 ValueError
+    用 issubclass() 重新检查
+    如果是 EpisodeReplayBuffer 子类则放行
+end note
+
+/' =============================================================================
+    配置与使用
+============================================================================= '/
+
+CustomSACConfig --> PrioritizedSumTreeBuffer : replay_buffer_config["type"]
+
+package "CustomSAC" <<Base>> {
+    class CustomSAC {
+        + local_replay_buffer
+        + _create_local_replay_buffer_if_necessary()
+    }
+
+    class SAC <<Upstream>>
+
+    SAC <|-- CustomSAC
+    CustomSAC o-- PrioritizedSumTreeBuffer
+}
+
+CustomSACConfig --> CustomSAC : build()
+
+legend right
+    | 颜色 | 含义 |
+    |------|------|
+    | 灰色 | Ray RLlib 原有类 |
+    | 蓝色 | 框架新增类 |
+    | 红色 | 需要重写的关键方法 |
+endlegend
+
+@enduml
