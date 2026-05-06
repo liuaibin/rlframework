@@ -23,6 +23,7 @@ help:
 	@echo ""
 	@echo "  uv-venv      Create virtual environment with uv"
 	@echo "  sync         Install dependencies using uv sync"
+	@echo "                (set UV_SYNC_OPTS=... to pass extra args, e.g. --index-url)"
 	@echo ""
 	@echo "  lint         Run ruff linter"
 	@echo "  format       Format code with ruff"
@@ -48,7 +49,7 @@ uv-venv: require-uv
 	@echo "Activate with: source $(VENV_DIR)/bin/activate"
 
 sync: require-uv | uv-venv
-	uv sync --dev
+	uv sync --dev $(UV_SYNC_OPTS)
 	@echo "✓ Dependencies synced with uv"
 
 # ---------------------------------------------------------------------------
