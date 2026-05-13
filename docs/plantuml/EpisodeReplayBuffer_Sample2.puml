@@ -1,0 +1,42 @@
+@startuml EpisodeReplayBuffer_Sample
+!theme plain
+
+title EpisodeReplayBuffer sample() 流程
+
+note top
+sample_episodes = False  -> _sample_batch()  返回 dict B T
+sample_episodes = True   -> _sample_episodes() 返回 list
+end note
+
+start
+
+while (B less than batch_size_B) is (Yes)
+    :随机 pick _indices rng.integers len;
+    :episode = episodes eps_idx - evicted;
+
+    :obs = episode.observations ts to ts+T;
+    :actions = episode.actions ts to ts+T;
+    :rewards = episode.rewards ts to ts+T;
+
+    if (episode ends before ts+T) then (Yes)
+        :下一 episode 从 t=0 续接;
+        :rewards[B].append 0.0;
+    endif
+
+    if (T equals batch_length_T) then (Yes)
+        :B += 1, T = 0;
+        :is_first[B][0] = True;
+        :is_last[B-1][T-1] = True;
+    endif
+endwhile (No)
+
+:调用 _update_sample_metrics;
+
+stop
+
+note right
+B=1: f2_0 f2_1 h0_0 h0_1
+f2 ends at T=2, auto-continues from h0 t=0
+end note
+
+@enduml

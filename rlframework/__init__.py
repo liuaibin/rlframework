@@ -8,10 +8,12 @@ Design Principles:
 
 import logging
 
+from rlframework.logging_config import setup_logging
+
 __version__ = "0.1.0"
 
-_rh = logging.StreamHandler()
-_rh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.root.addHandler(_rh)
-logging.root.setLevel(logging.INFO)
-logging.getLogger("ray").setLevel(logging.WARNING)
+_logger = logging.getLogger(__name__)
+if not any(isinstance(handler, logging.NullHandler) for handler in _logger.handlers):
+    _logger.addHandler(logging.NullHandler())
+
+__all__ = ["__version__", "setup_logging"]

@@ -1,0 +1,56 @@
+@startuml EpisodeReplayBuffer_Class
+!theme plain
+
+title EpisodeReplayBuffer 继承体系
+
+package "RLlib" {
+
+    class ReplayBufferInterface {
+        {abstract} +__len__() : int
+        {abstract} +add(batch)
+        {abstract} +sample(num_items) : Any
+        {abstract} +get_state() : Dict
+        {abstract} +set_state(state)
+    }
+
+    class EpisodeReplayBuffer {
+        +capacity : int
+        +batch_size_B : int
+        +batch_length_T : int
+        +episodes : deque
+        +episode_id_to_index : dict
+        +_indices : list
+        +_num_episodes_evicted : int
+        +_num_timesteps : int
+        +_num_timesteps_added : int
+        +sampled_timesteps : int
+        +rng : np.random.Generator
+        +metrics : MetricsLogger
+        --
+        +add(episodes)
+        +_sample_batch() : dict
+        +_sample_episodes() : list
+        +sample(...) : Any
+        +get_num_episodes() : int
+        +get_num_timesteps() : int
+        +get_sampled_timesteps() : int
+        +get_added_timesteps() : int
+        +get_state() : Dict
+        +set_state(state)
+        +_update_add_metrics()
+        +_update_sample_metrics()
+    }
+
+    ReplayBufferInterface <|-- EpisodeReplayBuffer
+}
+
+note top of ReplayBufferInterface
+抽象接口，RLlib 定义
+end note
+
+note bottom of EpisodeReplayBuffer
+核心：以 episode 为原子单位存储在 deque 中
+扁平 _indices 列表支持 O(1) 均匀随机采样
+end note
+
+@enduml

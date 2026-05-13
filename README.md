@@ -57,13 +57,35 @@ pip install -e ".[dev]"
 python -c "import rlframework; print('✓ rlframework 安装成功')"
 ```
 
+### 日志配置
+
+`import rlframework` 不会修改使用方项目的全局日志配置。需要默认控制台日志时，在应用入口显式调用：
+
+```python
+from rlframework import setup_logging
+
+setup_logging()
+```
+
+如果只想控制 `rlframework` 自身日志，不想影响 root logger 或 Ray 日志：
+
+```python
+from rlframework import setup_logging
+
+setup_logging(configure_root=False, ray_level=None)
+```
+
 ## 基础示例
 
 ### 最小化示例：使用 CartPole 训练 PPO
 
 ```python
+from rlframework import setup_logging
 from rlframework.algorithms.ppo import CustomPPOConfig
 import ray
+
+# 显式开启 rlframework 默认日志配置
+setup_logging()
 
 # 初始化 Ray
 ray.init(ignore_reinit_error=True)
