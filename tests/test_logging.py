@@ -1,4 +1,4 @@
-"""Tests for rlframework.logging — reporters and FrameworkCallback."""
+"""Tests for observability reporters and FrameworkCallback."""
 
 import json
 from unittest.mock import MagicMock, patch

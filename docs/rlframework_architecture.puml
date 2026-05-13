@@ -271,10 +271,6 @@ package "4. 运行时 Hook / 指标观测" {
         + report()
     }
 
-    class "logging 命名空间\n(兼容旧导入路径)" as LoggingAliases <<Utility>> {
-        + rlframework.logging.FrameworkCallback
-        + rlframework.logging.reporters.*
-    }
 }
 
 FrameworkCallback --|> RLLibCallback
@@ -282,8 +278,6 @@ BaseReporter <|-- FileReporter
 BaseReporter <|-- InfluxDBReporter
 BaseReporter <|-- PrometheusReporter
 FrameworkCallback o-- "0..*" BaseReporter : 分发指标
-LoggingAliases ..> FrameworkCallback
-LoggingAliases ..> BaseReporter
 FrameworkConfigMixin ..> FrameworkCallback : 注入 callbacks(...)
 FrameworkConfigMixin ..> BaseReporter : 构建 reporters
 
