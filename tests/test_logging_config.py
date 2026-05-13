@@ -109,3 +109,45 @@ def test_setup_logging_can_target_package_only() -> None:
         package_logger.setLevel(original_package_level)
         package_logger.propagate = original_package_propagate
         ray_logger.setLevel(original_ray_level)
+
+
+def test_setup_logging_force_replaces_and_closes_handlers() -> None:
+    class CloseAwareHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed_by_setup = False
+
+        def emit(self, record: logging.LogRecord) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed_by_setup = True
+            super().close()
+
+    root = logging.getLogger()
+    original_level = root.level
+    original_handlers = list(root.handlers)
+    old_handler = CloseAwareHandler()
+
+    try:
+        root.handlers.clear()
+        root.addHandler(old_handler)
+
+        setup_logging("ERROR", force=True, ray_level=None)
+
+        handlers = [
+            handler
+            for handler in root.handlers
+            if getattr(handler, "_rlframework_handler", False)
+        ]
+        assert old_handler not in root.handlers
+        assert old_handler.closed_by_setup is True
+        assert root.level == logging.ERROR
+        assert len(handlers) == 1
+        assert handlers[0].level == logging.ERROR
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        root.handlers[:] = original_handlers
+        root.setLevel(original_level)

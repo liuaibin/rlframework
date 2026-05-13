@@ -19,6 +19,28 @@ def _find_rlframework_handler(logger: logging.Logger) -> logging.Handler | None:
 def _has_configured_handler(logger: logging.Logger) -> bool:
     return any(not isinstance(handler, logging.NullHandler) for handler in logger.handlers)
 
+'''
+# 1. 默认控制台日志
+  setup_logging()
+
+  # 2. 打开 debug
+  setup_logging(level="DEBUG")
+
+  # 3. 只配置 rlframework，不影响业务项目 root logger
+  setup_logging(configure_root=False, ray_level=None)
+
+  # 4. 单独控制某些 logger
+  setup_logging(
+      level="INFO",
+      logger_levels={
+          "rlframework": "DEBUG",
+          "ray": "ERROR",
+      },
+  )
+'''
+
+  # 5. 强制重配已有 handler
+  setup_logging(force=True)
 
 def setup_logging(
     level: int | str = logging.INFO,
@@ -37,13 +59,14 @@ def setup_logging(
     logger = logging.getLogger() if configure_root else logging.getLogger("rlframework")
 
     if force:
-        for handler in list(logger.handlers):
-            logger.removeHandler(handler)
+        for existing_handler in list(logger.handlers):
+            logger.removeHandler(existing_handler)
+            existing_handler.close()
 
     logger.setLevel(level)
 
     handler = _find_rlframework_handler(logger)
-    if handler is None and not _has_configured_handler(logger):
+    if handler is None and (force or not _has_configured_handler(logger)):
         handler = logging.StreamHandler()
         setattr(handler, _RLFRAMEWORK_HANDLER_ATTR, True)
         logger.addHandler(handler)
