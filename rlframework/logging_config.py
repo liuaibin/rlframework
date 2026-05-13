@@ -19,6 +19,7 @@ def _find_rlframework_handler(logger: logging.Logger) -> logging.Handler | None:
 def _has_configured_handler(logger: logging.Logger) -> bool:
     return any(not isinstance(handler, logging.NullHandler) for handler in logger.handlers)
 
+
 '''
 # 1. 默认控制台日志
   setup_logging()
@@ -37,10 +38,10 @@ def _has_configured_handler(logger: logging.Logger) -> bool:
           "ray": "ERROR",
       },
   )
-'''
 
   # 5. 强制重配已有 handler
   setup_logging(force=True)
+'''
 
 def setup_logging(
     level: int | str = logging.INFO,
