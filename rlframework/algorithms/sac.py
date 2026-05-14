@@ -70,7 +70,7 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
     def checkpointing(  # type: ignore[override]
         self,
         freq: int = 0,
-        local_dir: str = "./checkpoints",
+        local_dir: str | None = None,
     ) -> "CustomSACConfig":
         """Store checkpointing preferences for use with :class:`~rlframework.storage.AutoCheckpoint`."""
         self.framework_checkpointing(freq=freq, local_dir=local_dir)

@@ -20,8 +20,6 @@ import os
 import ray
 
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -29,21 +27,22 @@ from rlframework.observability.reporters import FileReporter
 ray.init(ignore_reinit_error=True)
 
 # ---------------------------------------------------------------------------
-# 2. Build reporters
+# 2. Configure algorithm
 # ---------------------------------------------------------------------------
-os.makedirs("./logs", exist_ok=True)
-reporters = [FileReporter(filepath="./logs/cartpole_metrics.jsonl")]
-
-# ---------------------------------------------------------------------------
-# 3. Configure algorithm
-# ---------------------------------------------------------------------------
-# All checkpointing is handled automatically by FrameworkCallback:
+# Run artifacts are managed by rlframework:
+#   - RLlib logs: runs/cartpole/rllib_logs/
+#   - Metrics: runs/cartpole/metrics/metrics.jsonl
+#   - Checkpoints: runs/cartpole/checkpoints/
+#   - Local storage uploads: runs/cartpole/storage/
+#
+# Checkpointing is handled automatically by FrameworkCallback:
 #   - Periodic save every 5 iterations  (framework_checkpointing freq=5, local only)
 #   - Best-model save on eval improvement (requires .evaluation())
-#   - Best-model upload every 5 improvements via .storage()
+#   - Best-model upload on every improvement via .storage(best_upload_freq=1)
 # ---------------------------------------------------------------------------
 config = (
     CustomPPOConfig()
+    .framework_run("cartpole_1", root_dir="./runs")
     .environment("CartPole-v1")
     .training(
         lr=5e-5,
@@ -53,14 +52,14 @@ config = (
     )
     .env_runners(num_env_runners=2)
     .evaluation(evaluation_interval=5)
-    .framework_checkpointing(freq=5, local_dir="./checkpoints/cartpole")
+    .framework_checkpointing(freq=5)
+    .metrics(reporters=["file"])
     .storage(upload_async=True, best_upload_freq=1)
-    .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 
 # ---------------------------------------------------------------------------
-# 4. Helper: find latest checkpoint for resume
+# 3. Helper: find latest checkpoint for resume
 # ---------------------------------------------------------------------------
 def find_latest_checkpoint(checkpoint_dir: str):
     """Find the most recent checkpoint by modification time."""
@@ -72,13 +71,14 @@ def find_latest_checkpoint(checkpoint_dir: str):
 
 
 # ---------------------------------------------------------------------------
-# 5. Build algorithm
+# 4. Build algorithm
 # ---------------------------------------------------------------------------
 algo = config.build()
 
-checkpoint_base = os.path.abspath("./checkpoints/cartpole")
+layout = config.framework_layout
+assert layout is not None
+checkpoint_base = str(layout.checkpoint_dir.resolve())
 latest_ckpt = find_latest_checkpoint(checkpoint_base)
-print(latest_ckpt)
 if latest_ckpt:
     print(f"Found existing checkpoint: {latest_ckpt}")
     print("Restoring model from checkpoint...")
@@ -91,7 +91,7 @@ else:
     start_iter = 0
 
 # ---------------------------------------------------------------------------
-# 6. Training loop — no manual checkpoint logic needed
+# 5. Training loop — no manual checkpoint logic needed
 # ---------------------------------------------------------------------------
 for iteration in range(start_iter, 15):
     result = algo.train()
@@ -102,4 +102,4 @@ for iteration in range(start_iter, 15):
 
 algo.stop()
 ray.shutdown()
-print("Done. Metrics written to ./logs/cartpole_metrics.jsonl")
+print(f"Done. Metrics written to {layout.metrics_dir / 'metrics.jsonl'}")

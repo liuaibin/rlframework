@@ -234,6 +234,7 @@ def train():
 
     config = (
         CustomPPOConfig()
+        .framework_run("custom_env_pointmass2d", root_dir="./runs")
         .environment(
             env=PointMass2DWithWrappers,
             env_config={
@@ -250,6 +251,7 @@ def train():
             minibatch_size=256,
         )
         .env_runners(num_env_runners=2)
+        .metrics(reporters=["file"])
     )
 
     algo = config.build()

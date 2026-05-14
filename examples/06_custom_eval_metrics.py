@@ -15,7 +15,6 @@ import ray
 
 from rlframework.algorithms.ppo import CustomPPOConfig
 from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter
 
 # ---------------------------------------------------------------------------
 # 1. Custom callback that adds episode-level metrics
@@ -48,10 +47,9 @@ ray.init(ignore_reinit_error=True)
 # ---------------------------------------------------------------------------
 # 3. Configure with evaluation enabled
 # ---------------------------------------------------------------------------
-reporters = [FileReporter(filepath="./logs/eval_metrics.jsonl")]
-
 config = (
     CustomPPOConfig()
+    .framework_run("custom_eval_metrics", root_dir="./runs")
     .environment("CartPole-v1")
     .training(lr=3e-4, train_batch_size=4000, num_epochs=10, minibatch_size=128)
     .env_runners(num_env_runners=2)
@@ -60,7 +58,8 @@ config = (
         evaluation_duration=10,  # run 10 evaluation episodes
         evaluation_num_env_runners=1,
     )
-    .callbacks(lambda: EvalMetricsCallback.with_reporters(reporters))
+    .metrics(reporters=["file"])
+    .callbacks(EvalMetricsCallback.with_reporters([]))
 )
 
 # ---------------------------------------------------------------------------
@@ -88,4 +87,6 @@ for iteration in range(30):
 
 algo.stop()
 ray.shutdown()
-print("\nDone. Metrics (with phase=train/eval) in ./logs/eval_metrics.jsonl")
+layout = config.framework_layout
+assert layout is not None
+print(f"\nDone. Metrics (with phase=train/eval) in {layout.metrics_dir / 'metrics.jsonl'}")

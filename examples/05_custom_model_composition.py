@@ -186,6 +186,7 @@ def main():
     # Custom component options can be passed through the new RLModule model_config.
     config = (
         CustomPPOConfig()
+        .framework_run("custom_model_composition", root_dir="./runs")
         .environment("CartPole-v1")
         .framework("torch")
         .training(
@@ -210,6 +211,7 @@ def main():
             actor_head="my_actor_head",
             critic_head="my_critic_head",
         )
+        .metrics(reporters=["file"])
     )
 
     print("\nBuilding algorithm with custom model components...")

@@ -24,8 +24,6 @@ import os
 import ray
 
 from rlframework.algorithms.sac import CustomSACConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter, InfluxDBReporter
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -33,22 +31,21 @@ from rlframework.observability.reporters import FileReporter, InfluxDBReporter
 ray.init(ignore_reinit_error=True)
 
 # ---------------------------------------------------------------------------
-# 2. Build reporters based on env vars
+# 2. Build reporter config based on env vars
 # ---------------------------------------------------------------------------
-os.makedirs("./logs", exist_ok=True)
-reporters = [FileReporter(filepath="./logs/pendulum_metrics.jsonl")]
+metric_reporters = ["file"]
+reporter_configs = {}
 
 influxdb_url = os.environ.get("INFLUXDB_URL")
 if influxdb_url:
-    reporters.append(
-        InfluxDBReporter(
-            url=influxdb_url,
-            org=os.environ.get("INFLUXDB_ORG", "rl"),
-            bucket=os.environ.get("INFLUXDB_BUCKET", "metrics"),
-            token=os.environ.get("INFLUXDB_TOKEN", ""),
-            measurement="sac_pendulum",
-        )
-    )
+    metric_reporters.append("influxdb")
+    reporter_configs["influxdb"] = {
+        "url": influxdb_url,
+        "org": os.environ.get("INFLUXDB_ORG", "rl"),
+        "bucket": os.environ.get("INFLUXDB_BUCKET", "metrics"),
+        "token": os.environ.get("INFLUXDB_TOKEN", ""),
+        "measurement": "sac_pendulum",
+    }
     print(f"InfluxDB reporter enabled: {influxdb_url}")
 
 # ---------------------------------------------------------------------------
@@ -56,6 +53,7 @@ if influxdb_url:
 # ---------------------------------------------------------------------------
 config = (
     CustomSACConfig()
+    .framework_run("pendulum", root_dir="./runs")
     .environment("Pendulum-v1")
     .training(
         actor_lr=3e-4,
@@ -71,15 +69,17 @@ config = (
     )
     .env_runners(num_env_runners=1, rollout_fragment_length=1)
     .evaluation(evaluation_interval=20)
-    .checkpointing(freq=20, local_dir="./checkpoints/pendulum")
+    .checkpointing(freq=20)
+    .metrics(reporters=metric_reporters, reporter_configs=reporter_configs)
     .storage(upload_async=True, best_upload_freq=10)
-    .callbacks(FrameworkCallback.with_reporters(reporters))
 )
 
 # ---------------------------------------------------------------------------
 # 4. Train — no manual checkpoint logic needed
 # ---------------------------------------------------------------------------
 algo = config.build()
+layout = config.framework_layout
+assert layout is not None
 
 for iteration in range(200):
     result = algo.train()
@@ -90,4 +90,4 @@ for iteration in range(200):
 
 algo.stop()
 ray.shutdown()
-print("Done. Metrics written to ./logs/pendulum_metrics.jsonl")
+print(f"Done. Metrics written to {layout.metrics_dir / 'metrics.jsonl'}")

@@ -13,8 +13,6 @@ Run:
 import ray
 
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter
 
 # ---------------------------------------------------------------------------
 # 1. Init Ray
@@ -36,10 +34,9 @@ lr_schedule = [
 # ---------------------------------------------------------------------------
 # 3. Configure
 # ---------------------------------------------------------------------------
-reporters = [FileReporter(filepath="./logs/lr_schedule_metrics.jsonl")]
-
 config = (
     CustomPPOConfig()
+    .framework_run("lr_schedule", root_dir="./runs")
     .environment("CartPole-v1")
     .training(
         lr=lr_schedule,  # <-- pass schedule instead of fixed float
@@ -48,7 +45,7 @@ config = (
         minibatch_size=128,
     )
     .env_runners(num_env_runners=2)
-    .callbacks(lambda: FrameworkCallback.with_reporters(reporters))
+    .metrics(reporters=["file"])
 )
 
 # ---------------------------------------------------------------------------

@@ -14,8 +14,6 @@ Run:
 import ray
 
 from rlframework.algorithms.sac import CustomSACConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter
 from rlframework.utils.replay_buffers import PrioritizedSumTreeBuffer
 
 # ===========================================================================
@@ -23,13 +21,12 @@ from rlframework.utils.replay_buffers import PrioritizedSumTreeBuffer
 # ===========================================================================
 ray.init(ignore_reinit_error=True)
 
-reporters = [FileReporter(filepath="./logs/custom_buffer_metrics.jsonl")]
-
 # ===========================================================================
 # Configure SAC with a custom prioritized replay buffer
 # ===========================================================================
 config = (
     CustomSACConfig()
+    .framework_run("custom_replay_buffer", root_dir="./runs")
     .environment("Pendulum-v1")
     .training(
         actor_lr=3e-4,
@@ -44,7 +41,7 @@ config = (
         },
     )
     .env_runners(num_env_runners=2)
-    .callbacks(FrameworkCallback.with_reporters(reporters))
+    .metrics(reporters=["file"])
 )
 
 # ===========================================================================

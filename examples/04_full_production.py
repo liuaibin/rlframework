@@ -41,13 +41,6 @@ import ray
 
 from rlframework.algorithms.sac import CustomSACConfig
 from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import (
-    FileReporter,
-    InfluxDBReporter,
-    PrometheusReporter,
-)
-from rlframework.storage.backends import get_backend
-from rlframework.storage.checkpoint_manager import CheckpointManager
 
 # ---------------------------------------------------------------------------
 # Configuration (override via env vars in CI/CD)
@@ -75,52 +68,29 @@ CHECKPOINT_FREQ = 20
 ray.init(ignore_reinit_error=True)
 
 # ---------------------------------------------------------------------------
-# 2. Reporters
+# 2. Reporter configs
 # ---------------------------------------------------------------------------
-os.makedirs("./logs", exist_ok=True)
-
-reporters = [
-    # Always write to file as safety net
-    FileReporter(filepath=f"./logs/{EXPERIMENT_NAME}.jsonl"),
-    # InfluxDB for Grafana dashboards
-    InfluxDBReporter(
-        url=INFLUXDB_URL,
-        org=INFLUXDB_ORG,
-        bucket=INFLUXDB_BUCKET,
-        token=INFLUXDB_TOKEN,
-        measurement=MODEL_NAME,
-    ),
-    # Prometheus for alerting
-    PrometheusReporter(
-        gateway=PROMETHEUS_GW,
-        job=EXPERIMENT_NAME,
-    ),
-]
-
-# ---------------------------------------------------------------------------
-# 3. Storage: MinIO backend with async upload
-# ---------------------------------------------------------------------------
-backend = get_backend(
-    "minio",
-    {
-        "endpoint": MINIO_ENDPOINT,
-        "access_key": MINIO_ACCESS_KEY,
-        "secret_key": MINIO_SECRET_KEY,
-        "bucket": MINIO_BUCKET,
-        "secure": False,
+metric_reporters = ["file", "influxdb", "prometheus"]
+reporter_configs = {
+    "influxdb": {
+        "url": INFLUXDB_URL,
+        "org": INFLUXDB_ORG,
+        "bucket": INFLUXDB_BUCKET,
+        "token": INFLUXDB_TOKEN,
+        "measurement": MODEL_NAME,
     },
-)
-ckpt_manager = CheckpointManager(
-    backend=backend,
-    upload_async=True,
-    upload_retries=3,
-)
+    "prometheus": {
+        "gateway": PROMETHEUS_GW,
+        "job": EXPERIMENT_NAME,
+    },
+}
 
 # ---------------------------------------------------------------------------
-# 4. SAC config
+# 3. SAC config
 # ---------------------------------------------------------------------------
 config = (
     CustomSACConfig()
+    .framework_run(EXPERIMENT_NAME, root_dir="./runs")
     .environment("Pendulum-v1")
     .training(
         lr=3e-4,
@@ -133,41 +103,37 @@ config = (
         tau=0.005,
     )
     .env_runners(num_env_runners=2, rollout_fragment_length=1)
-    .callbacks(FrameworkCallback.with_reporters(reporters, collect_resource_stats=True))
+    .evaluation(evaluation_interval=CHECKPOINT_FREQ)
+    .checkpointing(freq=CHECKPOINT_FREQ)
+    .metrics(reporters=metric_reporters, reporter_configs=reporter_configs)
+    .storage(
+        backend="minio",
+        endpoint=MINIO_ENDPOINT,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        bucket=MINIO_BUCKET,
+        secure=False,
+        upload_async=True,
+        best_upload_freq=1,
+    )
+    .callbacks(FrameworkCallback.with_reporters([], collect_resource_stats=True))
 )
 
 # ---------------------------------------------------------------------------
-# 5. Training loop
+# 4. Training loop
 # ---------------------------------------------------------------------------
 algo = config.build()
-best_reward = float("-inf")
 
 for iteration in range(TOTAL_ITERATIONS):
     result = algo.train()
     mean_reward = result.get("env_runners", {}).get("episode_return_mean", float("nan"))
     print(f"[{EXPERIMENT_NAME}][iter {iteration:04d}] reward={mean_reward:.3f}")
 
-    # Periodic checkpoint
-    if (iteration + 1) % CHECKPOINT_FREQ == 0:
-        local_path = algo.save_to_path(f"./checkpoints/{EXPERIMENT_NAME}/iter_{iteration + 1}")
-        remote_name = f"{EXPERIMENT_NAME}/iter_{iteration + 1}.tar"
-        ckpt_manager.upload(local_path, remote_name)
-        print(f"  -> checkpoint uploaded: {remote_name}")
-
-    # Track best model
-    if mean_reward > best_reward:
-        best_reward = mean_reward
-        local_best = algo.save_to_path(f"./checkpoints/{EXPERIMENT_NAME}/best")
-        ckpt_manager.upload(local_best, f"{EXPERIMENT_NAME}/best.tar")
-
 # ---------------------------------------------------------------------------
-# 6. Finalize
+# 5. Finalize
 # ---------------------------------------------------------------------------
-ckpt_manager.shutdown()
-
-for reporter in reporters:
-    reporter.close()
-
 algo.stop()
 ray.shutdown()
-print(f"Experiment complete. Best reward: {best_reward:.3f}")
+layout = config.framework_layout
+assert layout is not None
+print(f"Experiment complete. Local run artifacts: {layout.run_dir}")

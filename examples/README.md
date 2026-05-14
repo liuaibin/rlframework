@@ -6,8 +6,8 @@ Quick-start examples showing how to use each part of the framework.
 
 | File | Algorithm | Key Features |
 |------|-----------|--------------|
-| [01_ppo_cartpole.py](01_ppo_cartpole.py) | PPO | Minimal setup, local file reporter, local checkpoint |
-| [02_sac_pendulum.py](02_sac_pendulum.py) | SAC | InfluxDB reporter (optional), MinIO upload (optional) |
+| [01_ppo_cartpole.py](01_ppo_cartpole.py) | PPO | Minimal setup, managed run layout, local metrics/checkpoints |
+| [02_sac_pendulum.py](02_sac_pendulum.py) | SAC | File metrics, optional InfluxDB, managed checkpointing |
 | [03_custom_algorithm.py](03_custom_algorithm.py) | Custom PPO | Hook overrides, curriculum learning, gradient clipping |
 | [04_full_production.py](04_full_production.py) | SAC | MinIO + InfluxDB + Prometheus production setup |
 
@@ -22,8 +22,10 @@ python rlframework/examples/01_ppo_cartpole.py
 ```
 
 Output files:
-- `./logs/cartpole_metrics.jsonl` — JSON-lines metrics
-- `./checkpoints/cartpole/` — local checkpoints
+- `./runs/cartpole/rllib_logs/` — RLlib JSON/CSV/TensorBoard logs
+- `./runs/cartpole/metrics/metrics.jsonl` — JSON-lines metrics
+- `./runs/cartpole/checkpoints/` — local checkpoints
+- `./runs/cartpole/storage/` — local storage backend artifacts
 
 ---
 
@@ -38,9 +40,6 @@ INFLUXDB_URL=http://localhost:8086 \
 INFLUXDB_TOKEN=my-token \
 python rlframework/examples/02_sac_pendulum.py
 
-# With MinIO
-MINIO_ENDPOINT=localhost:9000 \
-python rlframework/examples/02_sac_pendulum.py
 ```
 
 ---
@@ -96,42 +95,59 @@ Environment variables:
 
 ## Common Patterns
 
-### Add a reporter at any time
+### Configure reporters
 
 ```python
-from rlframework.observability.reporters import InfluxDBReporter, FileReporter
-
-reporters = [
-    FileReporter("./logs/metrics.jsonl"),
-    InfluxDBReporter(url="http://influxdb:8086", org="rl", bucket="runs", token="..."),
-]
+config = (
+    CustomPPOConfig()
+    .framework_run("cartpole", root_dir="./runs")
+    .metrics(
+        reporters=["file", "influxdb"],
+        reporter_configs={
+            "influxdb": {
+                "url": "http://influxdb:8086",
+                "org": "rl",
+                "bucket": "runs",
+                "token": "...",
+            }
+        },
+    )
+)
 ```
 
-### Switch storage backend
+### Configure storage backend
 
 ```python
-from rlframework.storage.backends import get_backend
-
 # Local
-backend = get_backend("local", {"root": "/tmp/checkpoints"})
+config = CustomPPOConfig().framework_run("cartpole").storage()
 
 # MinIO
-backend = get_backend("minio", {
-    "endpoint": "minio:9000",
-    "access_key": "admin",
-    "secret_key": "password",
-    "bucket": "rl",
-})
+config = (
+    CustomPPOConfig()
+    .framework_run("cartpole")
+    .storage(
+        backend="minio",
+        endpoint="minio:9000",
+        access_key="admin",
+        secret_key="password",
+        bucket="rl",
+    )
+)
 
 # S3
-backend = get_backend("s3", {
-    "bucket": "my-rl-bucket",
-    "prefix": "experiments/",
-    "region_name": "us-east-1",
-})
+config = (
+    CustomPPOConfig()
+    .framework_run("cartpole")
+    .storage(
+        backend="s3",
+        bucket="my-rl-bucket",
+        prefix="experiments/",
+        region_name="us-east-1",
+    )
+)
 ```
 
-### Upload checkpoints to object storage
+### Manually upload a checkpoint when needed
 
 ```python
 from rlframework.storage.checkpoint_manager import CheckpointManager
@@ -141,5 +157,5 @@ ckpt_mgr = CheckpointManager(
     backend_config={"endpoint": "minio:9000", "bucket": "rl"},
     upload_async=True,
 )
-ckpt_mgr.upload("./checkpoints/iter_100", "sac_pendulum/iter_100.tar")
+ckpt_mgr.upload("./runs/cartpole/checkpoints/iter_100", "cartpole/iter_100.tar")
 ```

@@ -17,7 +17,6 @@ Run:
 """
 
 import os
-import tempfile
 
 import ray
 
@@ -58,11 +57,15 @@ ray.init(ignore_reinit_error=True)
 
 config = (
     CustomPPOConfig()
+    .framework_run(MODEL_NAME, root_dir="./runs")
     .environment("CartPole-v1")
     .training(lr=3e-4, train_batch_size=4000, num_epochs=10)
     .env_runners(num_env_runners=2)
+    .metrics(reporters=["file"])
 )
 algo = config.build()
+layout = config.framework_layout
+assert layout is not None
 
 for iteration in range(TOTAL_ITERATIONS):
     result = algo.train()
@@ -71,10 +74,8 @@ for iteration in range(TOTAL_ITERATIONS):
 
     # Save checkpoint every SAVE_FREQ iterations
     if (iteration + 1) % SAVE_FREQ == 0:
-        # Save RLlib checkpoint to a temp directory
-        ckpt_dir = algo.save(tempfile.mkdtemp(prefix="rl_ckpt_")).checkpoint.path
-
         version = f"iter_{iteration + 1}"
+        ckpt_dir = algo.save_to_path(str(layout.checkpoint_dir / version))
         remote_name = f"{MODEL_NAME}/{version}.tar"
         ckpt_manager.upload(ckpt_dir, remote_name)
         print(f"  -> saved {version} to MinIO (reward={mean_reward:.2f})")

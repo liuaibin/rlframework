@@ -15,8 +15,6 @@ import ray
 from ray.rllib.utils.typing import ResultDict
 
 from rlframework.algorithms.ppo import CustomPPO, CustomPPOConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import FileReporter
 
 # ---------------------------------------------------------------------------
 # 1. Define a custom PPO subclass
@@ -65,14 +63,13 @@ class CurriculumPPOConfig(CustomPPOConfig):
 
 ray.init(ignore_reinit_error=True)
 
-reporters = [FileReporter(filepath="./logs/curriculum_ppo_metrics.jsonl")]
-
 config = (
     CurriculumPPOConfig()
+    .framework_run("curriculum_ppo", root_dir="./runs")
     .environment("CartPole-v1")
     .training(lr=3e-4, train_batch_size=2000)
     .env_runners(num_env_runners=2)
-    .callbacks(FrameworkCallback.with_reporters(reporters))
+    .metrics(reporters=["file"])
 )
 
 algo = config.build()

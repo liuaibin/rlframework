@@ -121,6 +121,7 @@ def main():
     # No catalog_class needed — the RLModule builds everything itself
     config = (
         CustomPPOConfig()
+        .framework_run("custom_rl_module", root_dir="./runs")
         .environment("CartPole-v1")
         .framework("torch")
         .training(
@@ -139,6 +140,7 @@ def main():
                 # catalog_class is omitted — MinimalPPOModule is fully self-contained
             ),
         )
+        .metrics(reporters=["file"])
     )
 
     print("Building algorithm with custom RLModule...")

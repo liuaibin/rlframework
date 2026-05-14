@@ -41,12 +41,6 @@ import os
 import ray
 
 from rlframework.algorithms.ppo import CustomPPOConfig
-from rlframework.callbacks import FrameworkCallback
-from rlframework.observability.reporters import (
-    FileReporter,
-    InfluxDBReporter,
-    PrometheusReporter,
-)
 
 # =========================================================================
 # 1. Reporter configuration — override via env vars in CI / production
@@ -61,28 +55,23 @@ PROMETHEUS_GW = os.environ.get("PROMETHEUS_GW", "localhost:9091")
 EXPERIMENT = "ppo_cartpole_grafana"
 
 # =========================================================================
-# 2. Build reporter list
+# 2. Build reporter config
 # =========================================================================
-os.makedirs("./logs", exist_ok=True)
-
-reporters = [
-    # Local file — always available, no external deps
-    FileReporter(filepath=f"./logs/{EXPERIMENT}.jsonl"),
-    # InfluxDB — powers Grafana time-series dashboards
-    InfluxDBReporter(
-        url=INFLUXDB_URL,
-        org=INFLUXDB_ORG,
-        bucket=INFLUXDB_BUCKET,
-        token=INFLUXDB_TOKEN,
-        measurement="rl_training",
-    ),
-    # Prometheus Push Gateway — powers Grafana Prometheus panels
-    PrometheusReporter(
-        gateway=PROMETHEUS_GW,
-        job="rl_training",
-        grouping_key={"experiment": EXPERIMENT},
-    ),
-]
+metric_reporters = ["file", "influxdb", "prometheus"]
+reporter_configs = {
+    "influxdb": {
+        "url": INFLUXDB_URL,
+        "org": INFLUXDB_ORG,
+        "bucket": INFLUXDB_BUCKET,
+        "token": INFLUXDB_TOKEN,
+        "measurement": "rl_training",
+    },
+    "prometheus": {
+        "gateway": PROMETHEUS_GW,
+        "job": "rl_training",
+        "grouping_key": {"experiment": EXPERIMENT},
+    },
+}
 
 # =========================================================================
 # 3. Configure PPO with evaluation enabled
@@ -91,6 +80,7 @@ ray.init(ignore_reinit_error=True)
 
 config = (
     CustomPPOConfig()
+    .framework_run(EXPERIMENT, root_dir="./runs")
     .environment("CartPole-v1")
     .training(lr=3e-4, train_batch_size=4000, num_epochs=10, minibatch_size=128)
     .env_runners(num_env_runners=2)
@@ -99,7 +89,7 @@ config = (
         evaluation_num_env_runners=1,
         evaluation_duration=10,
     )
-    .callbacks(FrameworkCallback.with_reporters(reporters))
+    .metrics(reporters=metric_reporters, reporter_configs=reporter_configs)
 )
 
 # =========================================================================
@@ -117,11 +107,8 @@ for iteration in range(30):
     print(f"[iter {iteration:03d}] train_reward={mean_reward:.2f}{phase_info}")
 
 algo.stop()
-
-# Close reporters to flush buffers
-for r in reporters:
-    r.close()
-
 ray.shutdown()
+layout = config.framework_layout
+assert layout is not None
 print("\nDone. Open Grafana at http://localhost:3000 to view dashboards.")
-print(f"Local log: ./logs/{EXPERIMENT}.jsonl")
+print(f"Local log: {layout.metrics_dir / 'metrics.jsonl'}")

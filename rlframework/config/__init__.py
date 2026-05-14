@@ -1,3 +1,3 @@
-from rlframework.config.framework_config import FrameworkConfigMixin
+from rlframework.config.framework_config import FrameworkConfigMixin, RunLayout
 
-__all__ = ["FrameworkConfigMixin"]
+__all__ = ["FrameworkConfigMixin", "RunLayout"]
