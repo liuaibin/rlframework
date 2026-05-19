@@ -11,6 +11,7 @@ from rlframework.utils.exceptions import (
     ValidationError,
 )
 from rlframework.utils.replay_buffers import (
+    BatchEvictEpisodeReplayBuffer,
     PrioritizedSumTreeBuffer,
 )
 from rlframework.utils.torch_utils import (
@@ -23,6 +24,7 @@ from rlframework.utils.torch_utils import (
 
 __all__ = [
     "AlgorithmError",
+    "BatchEvictEpisodeReplayBuffer",
     "CheckpointError",
     "ConfigurationError",
     "EnvironmentError",

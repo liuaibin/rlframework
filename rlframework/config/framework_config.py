@@ -491,6 +491,4 @@ class FrameworkConfigMixin:
                 merged_kwargs["checkpoint_manager"] = ckpt_mgr
             existing_reporters = merged_kwargs.pop("reporters", None)
             user_reporters = existing_reporters if existing_reporters else reporters
-            cast(Any, self).callbacks(
-                existing.func.with_reporters(user_reporters, **merged_kwargs)
-            )
+            cast(Any, self).callbacks(existing.func.with_reporters(user_reporters, **merged_kwargs))

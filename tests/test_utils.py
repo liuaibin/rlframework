@@ -269,14 +269,84 @@ class TestDeepMerge:
 
 
 class TestReplayBuffers:
-    def test_public_exports_only_prioritized_episode_buffer(self):
+    @staticmethod
+    def _make_episode(
+        episode_id: str,
+        start: int,
+        length: int,
+        *,
+        terminated: bool = True,
+    ):
+        from ray.rllib.env.single_agent_episode import SingleAgentEpisode
+
+        return SingleAgentEpisode(
+            id_=episode_id,
+            observations=list(range(start, start + length + 1)),
+            actions=list(range(start, start + length)),
+            rewards=[1.0] * length,
+            terminated=terminated,
+            t_started=start,
+            len_lookback_buffer=0,
+        )
+
+    def test_public_replay_buffer_exports(self):
         import rlframework.utils as utils
         from rlframework.utils import replay_buffers
 
+        assert "BatchEvictEpisodeReplayBuffer" in replay_buffers.__all__
         assert "PrioritizedSumTreeBuffer" in replay_buffers.__all__
         assert "ReservoirReplayBuffer" not in replay_buffers.__all__
+        assert hasattr(utils, "BatchEvictEpisodeReplayBuffer")
         assert not hasattr(replay_buffers, "ReservoirReplayBuffer")
         assert not hasattr(utils, "ReservoirReplayBuffer")
+
+    def test_batch_evict_add_matches_episode_replay_buffer_state(self):
+        from ray.rllib.utils.replay_buffers.episode_replay_buffer import EpisodeReplayBuffer
+
+        from rlframework.utils.replay_buffers import BatchEvictEpisodeReplayBuffer
+
+        base_buffer = EpisodeReplayBuffer(capacity=6)
+        batch_evict_buffer = BatchEvictEpisodeReplayBuffer(capacity=6)
+
+        add_inputs = [
+            self._make_episode("A", 0, 2, terminated=False),
+            self._make_episode("B", 0, 2),
+            self._make_episode("A", 2, 2),
+            [
+                self._make_episode("C", 0, 2),
+                self._make_episode("D", 0, 2),
+                self._make_episode("E", 0, 2),
+            ],
+        ]
+
+        for episodes in add_inputs:
+            assert base_buffer.add(episodes) == batch_evict_buffer.add(episodes)
+            assert base_buffer.get_state() == batch_evict_buffer.get_state()
+            assert base_buffer.get_num_episodes() == batch_evict_buffer.get_num_episodes()
+            assert base_buffer.get_num_timesteps() == batch_evict_buffer.get_num_timesteps()
+            assert (
+                base_buffer.get_num_episodes_evicted()
+                == batch_evict_buffer.get_num_episodes_evicted()
+            )
+        assert base_buffer.get_metrics() == batch_evict_buffer.get_metrics()
+
+    def test_batch_evict_rebuild_handles_fragmented_episode_indices(self):
+        from rlframework.utils.replay_buffers import BatchEvictEpisodeReplayBuffer
+
+        buffer = BatchEvictEpisodeReplayBuffer(capacity=6)
+        buffer.add(self._make_episode("A", 0, 2, terminated=False))
+        buffer.add(self._make_episode("B", 0, 2))
+        buffer.add(self._make_episode("A", 2, 2))
+
+        # Episode A's indices are split around episode B before eviction.
+        assert buffer._indices == [(0, 0), (0, 1), (1, 0), (1, 1), (0, 2), (0, 3)]
+
+        buffer.add(self._make_episode("C", 0, 2))
+
+        assert "A" not in buffer.episode_id_to_index
+        assert buffer.episode_id_to_index == {"B": 1, "C": 2}
+        assert buffer._indices == [(1, 0), (1, 1), (2, 0), (2, 1)]
+        assert buffer.get_num_timesteps() == 4
 
 
 # ---------------------------------------------------------------------------

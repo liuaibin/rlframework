@@ -136,9 +136,7 @@ def test_setup_logging_force_replaces_and_closes_handlers() -> None:
         setup_logging("ERROR", force=True, ray_level=None)
 
         handlers = [
-            handler
-            for handler in root.handlers
-            if getattr(handler, "_rlframework_handler", False)
+            handler for handler in root.handlers if getattr(handler, "_rlframework_handler", False)
         ]
         assert old_handler not in root.handlers
         assert old_handler.closed_by_setup is True
