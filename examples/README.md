@@ -10,6 +10,7 @@ Quick-start examples showing how to use each part of the framework.
 | [02_sac_pendulum.py](02_sac_pendulum.py) | SAC | File metrics, optional InfluxDB, managed checkpointing |
 | [03_custom_algorithm.py](03_custom_algorithm.py) | Custom PPO | Hook overrides, curriculum learning, gradient clipping |
 | [04_full_production.py](04_full_production.py) | SAC | MinIO + InfluxDB + Prometheus production setup |
+| [10_batch_evict_episode_replay_buffer.py](10_batch_evict_episode_replay_buffer.py) | SAC | BatchEvictEpisodeReplayBuffer behavior check + SAC integration |
 
 ---
 
