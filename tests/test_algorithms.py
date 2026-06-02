@@ -135,6 +135,47 @@ class TestAlgorithmConfigs:
         # Should not raise on valid EpisodeReplayBuffer subclass path.
         cfg.validate()
 
+    def test_async_sac_preserves_sac_defaults_but_requires_supported_replay_buffer(self):
+        import pytest
+        from ray.rllib.algorithms.sac import SACConfig
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+
+        cfg = AsyncCustomSACConfig().learners(num_learners=1, num_gpus_per_learner=0)
+
+        assert (
+            cfg.num_steps_sampled_before_learning_starts
+            == SACConfig().num_steps_sampled_before_learning_starts
+        )
+        assert cfg.replay_buffer_config == SACConfig().replay_buffer_config
+
+        with pytest.raises(ValueError, match="only supports non-prioritized"):
+            cfg.validate()
+
+    def test_async_sac_validate_accepts_supported_replay_buffers(self):
+        from ray.rllib.utils.replay_buffers.episode_replay_buffer import EpisodeReplayBuffer
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+        from rlframework.utils.replay_buffers import BatchEvictEpisodeReplayBuffer
+
+        for buffer_type in (
+            "EpisodeReplayBuffer",
+            EpisodeReplayBuffer,
+            BatchEvictEpisodeReplayBuffer,
+            "rlframework.utils.replay_buffers.BatchEvictEpisodeReplayBuffer",
+        ):
+            cfg = (
+                AsyncCustomSACConfig()
+                .training(
+                    replay_buffer_config={
+                        "type": buffer_type,
+                        "capacity": 1000,
+                    }
+                )
+                .learners(num_learners=1, num_gpus_per_learner=0)
+            )
+            cfg.validate()
+
     def test_metrics_auto_wires_framework_callback_factory(self, tmp_dir):
         from rlframework.algorithms.ppo import CustomPPOConfig
         from rlframework.callbacks import FrameworkCallback

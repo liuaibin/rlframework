@@ -1,0 +1,89 @@
+@startuml BatchEvictEpisodeReplayBuffer_Add
+!theme plain
+
+title BatchEvictEpisodeReplayBuffer.add() 流程 - 批量清理 _indices 优化版
+
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  FontColor #0F172A
+}
+skinparam note {
+  BackgroundColor #F0FDF4
+  BorderColor #86EFAC
+}
+
+start
+:输入 episodes: SingleAgentEpisode 或 List[SingleAgentEpisode];
+:episode_list = force_list(episodes);
+:初始化本次 add 指标计数器\nepisode / env-step / agent / module;
+:evicted_episode_indices = set();
+
+while (还有待添加 episode ?) is (是)
+    :eps = copy.deepcopy(next episode);
+    :eps_len = len(eps);
+    :更新 step 计数\n_num_timesteps += eps_len\n_num_timesteps_added += eps_len\nnum_env_steps_added += eps_len;
+    :更新 agent/module step 指标\nagent_to_num_steps_added[DEFAULT_AGENT_ID] += eps_len\nmodule_to_num_steps_added[DEFAULT_MODULE_ID] += eps_len;
+
+    if (eps.id_ 已存在?) then (续接 ongoing episode)
+        :eps_idx = episode_id_to_index[eps.id_];
+        :existing_eps = episodes[eps_idx - _num_episodes_evicted];
+        :old_len = len(existing_eps);
+        :追加新 chunk 的 timestep 索引\n_indices.extend((eps_idx, old_len + i));
+        :existing_eps.concat_episode(eps);
+    else (新 episode)
+        :更新 episode added 指标\nnum_episodes_added += 1\nagent/module episodes_added += 1;
+        :episodes.append(eps);
+        :eps_idx = len(episodes) - 1 + _num_episodes_evicted;
+        :episode_id_to_index[eps.id_] = eps_idx;
+        :追加 timestep 索引\n_indices.extend((eps_idx, i));
+    endif
+
+    while (_num_timesteps > capacity\nand get_num_episodes() > 1 ?) is (是)
+        :evicted_eps = episodes.popleft();
+        :evicted_eps_len = len(evicted_eps);
+        :更新 eviction 指标\nnum_episodes_evicted += 1\nnum_env_steps_evicted += evicted_eps_len\nagent/module evicted += evicted_eps.agent_steps();
+        :_num_timesteps -= evicted_eps_len;
+
+        :evicted_idx = episode_id_to_index[evicted_eps.id_];
+        :del episode_id_to_index[evicted_eps.id_];
+        :evicted_episode_indices.add(evicted_idx);
+        :_num_episodes_evicted += 1;
+    endwhile (否)
+endwhile (否)
+
+if (evicted_episode_indices 非空?) then (是)
+    partition "批量重建 _indices: _rebuild_indices_batch" {
+        if (len(evicted_episode_indices) == 1 ?) then (单个 episode)
+            :evicted_idx = only item;
+            :一次 list comprehension 过滤\n保留 idx_tuple[0] != evicted_idx;
+        else (多个 episode)
+            :一次 list comprehension 过滤\n保留 idx_tuple[0] not in evicted_episode_indices;
+        endif
+        :self._indices = 过滤后的新列表;
+    }
+else (否)
+    :跳过 _indices 重建;
+endif
+
+:调用 _update_add_metrics(...); 
+:写入本次 add/evict 的 episode、env-step、agent、module 指标;
+stop
+
+note right
+优化点:
+1. eviction 时仍立即 popleft episode、删除 id 映射、更新计数
+2. 不在每次 eviction 后扫描和 splice _indices
+3. 仅记录 evicted_idx 到 set
+4. 整个 add() 处理完后最多一次过滤 _indices
+5. 批量 add 且连续驱逐时, 将多次 O(N) 扫描压缩为一次 O(N) 扫描
+
+保持与 EpisodeReplayBuffer.add() 一致的约束:
+- 输入先 force_list, 并 deepcopy 每个 episode
+- 已存在 id 表示 ongoing episode, 不增加 episode_added
+- _indices 仍使用全局 eps_idx, 不随 deque.popleft() 重编号
+- 超容量时从队头驱逐, 且至少保留 1 个 episode
+- 最后仍通过 _update_add_metrics() 记录 RLlib 指标
+end note
+
+@enduml
