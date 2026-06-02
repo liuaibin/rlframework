@@ -65,7 +65,7 @@ Prerequisites:
   pipeline (v1).
 """
 
-from typing import Any
+from typing import Any, cast
 
 import ray
 from ray.rllib.algorithms.dqn.dqn import calculate_rr_weights
@@ -204,8 +204,9 @@ class AsyncCustomSAC(CustomSAC):
     synchronous so this is also safe. The buffer should NOT be shared across threads.
     """
 
-    def __init__(self, config: AsyncCustomSACConfig, *args, **kwargs) -> None:
+    def __init__(self, config: AsyncCustomSACConfig, *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
+        runtime_config = cast(Any, self.config)
 
         # Detect Ray version for API routing.
         # foreach_env_runner_async_fetch_ready is only available in Ray >= 2.54.
@@ -214,7 +215,7 @@ class AsyncCustomSAC(CustomSAC):
         self._is_async_sampling: bool = hasattr(
             self.env_runner_group, "foreach_env_runner_async_fetch_ready"
         )
-        if self._is_async_sampling and self.config.num_learners <= 0:
+        if self._is_async_sampling and runtime_config.num_learners <= 0:
             raise ValueError(
                 "AsyncCustomSAC async sampling requires `num_learners > 0`. "
                 "Configure `.learners(num_learners=1, ...)`, or use CustomSAC "
@@ -222,7 +223,7 @@ class AsyncCustomSAC(CustomSAC):
             )
 
         self._train_credit = 0.0
-        self._pending_connector_states = []
+        self._pending_connector_states: list[Any] = []
 
     @classmethod
     @override(CustomSAC)
@@ -243,17 +244,20 @@ class AsyncCustomSAC(CustomSAC):
 
         This does NOT sample from the replay buffer or consume train credit.
         """
-        if self.config.num_learners <= 0:
+        runtime_config = cast(Any, self.config)
+        learner_group = cast(Any, self.learner_group)
+
+        if runtime_config.num_learners <= 0:
             return
 
-        worker_manager = getattr(self.learner_group, "_worker_manager", None)
+        worker_manager = getattr(learner_group, "_worker_manager", None)
         if worker_manager is None:
             return
 
         remote_results = worker_manager.fetch_ready_async_reqs(
             timeout_seconds=0.0,
         )
-        ready_results = self.learner_group._get_results(remote_results)
+        ready_results = learner_group._get_results(remote_results)
         if ready_results:
             self._process_learner_results(ready_results)
 
@@ -266,13 +270,14 @@ class AsyncCustomSAC(CustomSAC):
 
         self._training_step_async()
 
-        result = self.metrics.peek()
+        metrics_logger = cast(Any, self.metrics)
+        result = metrics_logger.peek()
         existing_metric_keys = set(result) if isinstance(result, dict) else set()
         result = self.on_after_training_step(result)
         if result:
             for key, value in result.items():
                 if key not in existing_metric_keys and isinstance(value, (int, float)):
-                    self.metrics.log_value(key, value, window=1)
+                    metrics_logger.log_value(key, value, window=1)
 
     def _training_step_async(self) -> None:
         """Async training step for Ray >= 2.54.0.
@@ -292,8 +297,11 @@ class AsyncCustomSAC(CustomSAC):
 
         self._drain_learner_results()
 
+        runtime_config = cast(Any, self.config)
+        learner_group = cast(Any, self.learner_group)
+        metrics_logger = cast(Any, self.metrics)
         current_ts = self._current_sampled_timesteps()
-        if current_ts >= self.config.num_steps_sampled_before_learning_starts:
+        if current_ts >= runtime_config.num_steps_sampled_before_learning_starts:
             self._train_credit += self._calc_credit_increment(new_env_steps)
 
             if self._train_credit >= 1.0:
@@ -302,23 +310,23 @@ class AsyncCustomSAC(CustomSAC):
                 # a second concurrent update would be rejected by FaultTolerantActorManager.
                 # Skip this iteration and let drain handle the result next time.
                 if (
-                    self.learner_group._worker_manager.num_outstanding_async_reqs()
-                    >= self.config.max_requests_in_flight_per_learner
+                    learner_group._worker_manager.num_outstanding_async_reqs()
+                    >= runtime_config.max_requests_in_flight_per_learner
                 ):
                     return
 
                 episodes = self._sample_from_replay_buffer()
 
-                learner_results = self.learner_group.update(
+                learner_results = learner_group.update(
                     episodes=episodes,
                     async_update=True,
                     return_state=True,
                     timesteps={
-                        NUM_ENV_STEPS_SAMPLED_LIFETIME: self.metrics.peek(
+                        NUM_ENV_STEPS_SAMPLED_LIFETIME: metrics_logger.peek(
                             (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME),
                             default=0,
                         ),
-                        NUM_AGENT_STEPS_SAMPLED_LIFETIME: self.metrics.peek(
+                        NUM_AGENT_STEPS_SAMPLED_LIFETIME: metrics_logger.peek(
                             (ENV_RUNNER_RESULTS, NUM_AGENT_STEPS_SAMPLED_LIFETIME),
                             default={},
                         ),
@@ -345,11 +353,14 @@ class AsyncCustomSAC(CustomSAC):
             Total number of env steps newly added to the replay buffer this call.
         """
         total_new_env_steps = 0
-        connector_states: list = []
+        connector_states: list[Any] = []
+        env_runner_group = cast(Any, self.env_runner_group)
+        metrics_logger = cast(Any, self.metrics)
+        replay_buffer = cast(Any, self.local_replay_buffer)
 
-        if self.env_runner_group.num_healthy_remote_workers() > 0:
-            with self.metrics.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
-                results = self.env_runner_group.foreach_env_runner_async_fetch_ready(
+        if env_runner_group.num_healthy_remote_workers() > 0:
+            with metrics_logger.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
+                results = env_runner_group.foreach_env_runner_async_fetch_ready(
                     func="sample_get_state_and_metrics",
                     tag=_ASYNC_SAMPLE_TAG,
                     timeout_seconds=0.0,
@@ -364,31 +375,32 @@ class AsyncCustomSAC(CustomSAC):
                 total_new_env_steps += env_step_count
                 pending_by_actor[actor_id] = connector_state
 
-                with self.metrics.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
-                    self.local_replay_buffer.add(episodes)
+                with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
+                    replay_buffer.add(episodes)
 
-                self.metrics.aggregate([metrics], key=ENV_RUNNER_RESULTS)
+                metrics_logger.aggregate([metrics], key=ENV_RUNNER_RESULTS)
 
             connector_states = list(pending_by_actor.values())
         else:
-            if self.env_runner is None:
+            env_runner = cast(Any, self.env_runner)
+            if env_runner is None:
                 self._pending_connector_states = []
                 return 0
 
             # No remote workers: sample locally (synchronous, non-blocking).
-            with self.metrics.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
-                episodes = self.env_runner.sample()
-                env_runner_metrics = self.env_runner.get_metrics()
+            with metrics_logger.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
+                episodes = env_runner.sample()
+                env_runner_metrics = env_runner.get_metrics()
                 env_step_count = self._count_episode_env_steps(episodes)
                 total_new_env_steps += env_step_count
 
-            with self.metrics.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
-                self.local_replay_buffer.add(episodes)
+            with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
+                replay_buffer.add(episodes)
 
-            self.metrics.aggregate([env_runner_metrics], key=ENV_RUNNER_RESULTS)
+            metrics_logger.aggregate([env_runner_metrics], key=ENV_RUNNER_RESULTS)
 
             connector_states.append(
-                self.env_runner.get_state(
+                env_runner.get_state(
                     components=[
                         COMPONENT_ENV_TO_MODULE_CONNECTOR,
                         COMPONENT_MODULE_TO_ENV_CONNECTOR,
@@ -399,29 +411,33 @@ class AsyncCustomSAC(CustomSAC):
         self._pending_connector_states = connector_states
         return total_new_env_steps
 
-    def _sample_from_replay_buffer(self) -> list:
+    def _sample_from_replay_buffer(self) -> list[Any]:
         """Sample a batch of episodes from the local replay buffer."""
-        with self.metrics.log_time((TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)):
-            episodes = self.local_replay_buffer.sample(
-                num_items=self.config.total_train_batch_size,
-                n_step=self.config.n_step,
+        runtime_config = cast(Any, self.config)
+        metrics_logger = cast(Any, self.metrics)
+        replay_buffer = cast(Any, self.local_replay_buffer)
+
+        with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)):
+            episodes = replay_buffer.sample(
+                num_items=runtime_config.total_train_batch_size,
+                n_step=runtime_config.n_step,
                 batch_length_T=(
-                    self._module_is_stateful * self.config.model_config.get("max_seq_len", 0)
+                    self._module_is_stateful * runtime_config.model_config.get("max_seq_len", 0)
                 ),
                 lookback=int(self._module_is_stateful),
                 min_batch_length_T=(
-                    self.config.burn_in_len if hasattr(self.config, "burn_in_len") else 0
+                    runtime_config.burn_in_len if hasattr(runtime_config, "burn_in_len") else 0
                 ),
-                gamma=self.config.gamma,
+                gamma=runtime_config.gamma,
                 sample_episodes=True,
             )
 
-            replay_buffer_results = self.local_replay_buffer.get_metrics()
-            self.metrics.aggregate([replay_buffer_results], key=REPLAY_BUFFER_RESULTS)
+            replay_buffer_results = replay_buffer.get_metrics()
+            metrics_logger.aggregate([replay_buffer_results], key=REPLAY_BUFFER_RESULTS)
 
         return episodes
 
-    def _process_learner_results(self, learner_results: list) -> None:
+    def _process_learner_results(self, learner_results: list[Any]) -> None:
         """Handle learner update results: aggregate metrics and sync weights.
 
         When async_update=True:
@@ -450,7 +466,10 @@ class AsyncCustomSAC(CustomSAC):
                 if isinstance(module_result, dict):
                     module_result.pop(TD_ERROR_KEY, None)
 
-        self.metrics.aggregate(learner_results, key=LEARNER_RESULTS)
+        metrics_logger = cast(Any, self.metrics)
+        env_runner_group = cast(Any, self.env_runner_group)
+        runtime_config = cast(Any, self.config)
+        metrics_logger.aggregate(learner_results, key=LEARNER_RESULTS)
 
         # _pending_connector_states is populated by _fetch_ready_samples_and_reissue
         # in the SAME training_step call, so it represents the connector states from
@@ -458,11 +477,11 @@ class AsyncCustomSAC(CustomSAC):
         # On the very first call, _pending_connector_states is [] — weight sync still
         # happens (without connector state broadcast), which is fine.
         if rl_module_state is not None:
-            self.env_runner_group.sync_env_runner_states(
-                config=self.config,
+            env_runner_group.sync_env_runner_states(
+                config=runtime_config,
                 connector_states=self._pending_connector_states,
                 rl_module_state=rl_module_state,
-                env_steps_sampled=self.metrics.peek(
+                env_steps_sampled=metrics_logger.peek(
                     (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME),
                     default=0,
                 ),
@@ -486,17 +505,22 @@ class AsyncCustomSAC(CustomSAC):
         if new_env_steps <= 0:
             return 0.0
 
-        if self.config.training_intensity is not None:
+        runtime_config = cast(Any, self.config)
+        env_runner_group = cast(Any, self.env_runner_group)
+
+        if runtime_config.training_intensity is not None:
             return (
-                new_env_steps * self.config.training_intensity / self.config.total_train_batch_size
+                new_env_steps
+                * runtime_config.training_intensity
+                / runtime_config.total_train_batch_size
             )
 
-        store_weight, train_weight = calculate_rr_weights(self.config)
+        store_weight, train_weight = calculate_rr_weights(runtime_config)
 
         rollout_steps_per_store = (
-            self.config.get_rollout_fragment_length()
-            * self.config.num_envs_per_env_runner
-            * max(self.env_runner_group.num_healthy_remote_workers(), 1)
+            runtime_config.get_rollout_fragment_length()
+            * runtime_config.num_envs_per_env_runner
+            * max(env_runner_group.num_healthy_remote_workers(), 1)
         )
         env_steps_per_cycle = rollout_steps_per_store * max(store_weight, 1)
         if env_steps_per_cycle == 0:
@@ -508,7 +532,7 @@ class AsyncCustomSAC(CustomSAC):
     # Shared helpers
     # =======================================================================
 
-    def _count_episode_env_steps(self, episodes: list) -> int:
+    def _count_episode_env_steps(self, episodes: list[Any]) -> int:
         """Count total env steps across a list of episodes.
 
         SingleAgentEpisode / MultiAgentEpisode expose ``env_steps()`` as a method,
@@ -525,14 +549,17 @@ class AsyncCustomSAC(CustomSAC):
 
     def _current_sampled_timesteps(self) -> int:
         """Return the total env or agent steps sampled so far."""
-        if self.config.count_steps_by == "agent_steps":
-            agent_steps = self.metrics.peek(
+        runtime_config = cast(Any, self.config)
+        metrics_logger = cast(Any, self.metrics)
+
+        if runtime_config.count_steps_by == "agent_steps":
+            agent_steps = metrics_logger.peek(
                 (ENV_RUNNER_RESULTS, NUM_AGENT_STEPS_SAMPLED_LIFETIME),
                 default={},
             )
             return sum(agent_steps.values()) if isinstance(agent_steps, dict) else agent_steps
 
-        return self.metrics.peek(
+        return metrics_logger.peek(
             (ENV_RUNNER_RESULTS, NUM_ENV_STEPS_SAMPLED_LIFETIME),
             default=0,
         )

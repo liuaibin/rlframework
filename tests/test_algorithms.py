@@ -260,3 +260,73 @@ class TestAlgorithmConfigs:
 
         callback = cfg.callbacks_class()
         assert callback._ckpt_manager is user_manager
+
+    def test_resume_from_restores_after_build(self, tmp_dir, monkeypatch):
+        from ray.rllib.algorithms.ppo import PPOConfig
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+
+        checkpoint_dir = tmp_dir / "iter_000020"
+        checkpoint_dir.mkdir()
+        restored_paths = []
+
+        class _FakeAlgorithm:
+            def restore_from_path(self, path):
+                restored_paths.append(path)
+
+        def fake_build(self, *args, **kwargs):
+            return _FakeAlgorithm()
+
+        monkeypatch.setattr(PPOConfig, "build", fake_build)
+
+        algo = CustomPPOConfig().resume_from(checkpoint_dir).build()
+
+        assert isinstance(algo, _FakeAlgorithm)
+        assert restored_paths == [str(checkpoint_dir)]
+
+    def test_resume_from_validates_checkpoint_path(self):
+        import pytest
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.utils.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="resume_from checkpoint_path"):
+            CustomPPOConfig().resume_from("")
+
+    def test_resume_from_rejects_missing_local_checkpoint(self, tmp_dir, monkeypatch):
+        import pytest
+        from ray.rllib.algorithms.ppo import PPOConfig
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.utils.exceptions import CheckpointError
+
+        build_called = False
+
+        def fake_build(self, *args, **kwargs):
+            nonlocal build_called
+            build_called = True
+            return object()
+
+        monkeypatch.setattr(PPOConfig, "build", fake_build)
+
+        with pytest.raises(CheckpointError, match="resume checkpoint path does not exist"):
+            CustomPPOConfig().resume_from(tmp_dir / "missing").build()
+        assert build_called is False
+
+    def test_resume_from_requires_algorithm_restore_method(self, tmp_dir, monkeypatch):
+        import pytest
+        from ray.rllib.algorithms.ppo import PPOConfig
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.utils.exceptions import ConfigurationError
+
+        checkpoint_dir = tmp_dir / "iter_000020"
+        checkpoint_dir.mkdir()
+
+        def fake_build(self, *args, **kwargs):
+            return object()
+
+        monkeypatch.setattr(PPOConfig, "build", fake_build)
+
+        with pytest.raises(ConfigurationError, match="restore_from_path"):
+            CustomPPOConfig().resume_from(checkpoint_dir).build()

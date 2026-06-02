@@ -43,7 +43,7 @@ from rlframework.callbacks import FrameworkCallback
 from rlframework.config import validators
 from rlframework.observability.reporters import BaseReporter
 from rlframework.storage import CheckpointManager
-from rlframework.utils.exceptions import ConfigurationError, ValidationError
+from rlframework.utils.exceptions import CheckpointError, ConfigurationError, ValidationError
 
 
 @dataclass(frozen=True)
@@ -99,6 +99,7 @@ class FrameworkConfigMixin:
         self._framework_logger_factory: Callable[[Any, RunLayout], Any] | None = None
         self._framework_managed_logger_creator: Callable[[Any], Any] | None = None
         self._warned_custom_logger_creator: bool = False
+        self._resume_checkpoint_path: str | None = None
 
     def _validate_framework_config(self) -> None:
         """Validate framework and training config parameters.
@@ -215,6 +216,33 @@ class FrameworkConfigMixin:
                 value=factory,
             )
         self._framework_logger_factory = factory
+        return self
+
+    def resume_from(
+        self,
+        checkpoint_path: str | os.PathLike[str],
+    ) -> "FrameworkConfigMixin":
+        """Restore the built RLlib algorithm from an existing checkpoint path.
+
+        The restore happens automatically after ``config.build()`` creates the
+        algorithm, so this can be used in the normal fluent config chain.
+
+        Args:
+            checkpoint_path: Local RLlib checkpoint directory/file, or a URI
+                supported by RLlib's ``restore_from_path``.
+
+        Returns:
+            This config (for method chaining).
+        """
+        if isinstance(checkpoint_path, os.PathLike):
+            checkpoint_path = os.fspath(checkpoint_path)
+        if not isinstance(checkpoint_path, str) or not checkpoint_path.strip():
+            raise ValidationError(
+                "resume_from checkpoint_path must be a non-empty string or path",
+                field="resume_from.checkpoint_path",
+                value=checkpoint_path,
+            )
+        self._resume_checkpoint_path = checkpoint_path.strip()
         return self
 
     def metrics(
@@ -445,6 +473,7 @@ class FrameworkConfigMixin:
         layout = self._resolve_framework_run_layout()
         self._apply_framework_run_layout(layout)
         self._validate_framework_config()
+        self._resolve_resume_checkpoint_path()
         reporters = self.build_reporters()
         ckpt_mgr = self.build_checkpoint_manager()
 
@@ -494,3 +523,36 @@ class FrameworkConfigMixin:
             existing_reporters = merged_kwargs.pop("reporters", None)
             user_reporters = existing_reporters if existing_reporters else reporters
             cast(Any, self).callbacks(existing.func.with_reporters(user_reporters, **merged_kwargs))
+
+    def _restore_framework_checkpoint(self, algorithm: Any) -> Any:
+        """Restore *algorithm* from the configured resume checkpoint, if any."""
+        checkpoint_path = self._resolve_resume_checkpoint_path()
+        if checkpoint_path is None:
+            return algorithm
+
+        restore_from_path = getattr(algorithm, "restore_from_path", None)
+        if not callable(restore_from_path):
+            raise ConfigurationError(
+                f"Configured algorithm does not support restore_from_path(): {checkpoint_path}",
+                field="resume_from.checkpoint_path",
+            )
+
+        restore_from_path(checkpoint_path)
+        return algorithm
+
+    def _resolve_resume_checkpoint_path(self) -> str | None:
+        """Return the configured resume checkpoint path after local validation."""
+        if self._resume_checkpoint_path is None:
+            return None
+
+        checkpoint_path = self._resume_checkpoint_path
+        if "://" in checkpoint_path:
+            return checkpoint_path
+
+        local_path = Path(checkpoint_path).expanduser()
+        if not local_path.exists():
+            raise CheckpointError(
+                "resume checkpoint path does not exist",
+                checkpoint_path=str(local_path),
+            )
+        return str(local_path)

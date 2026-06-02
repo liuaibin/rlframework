@@ -6,6 +6,11 @@ ROOTDIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # Virtual environment directory
 VENV_DIR ?= .venv
 
+# Keep uv cache inside the workspace by default so checks work in restricted
+# environments. Users can still override this with UV_CACHE_DIR=/path.
+UV_CACHE_DIR ?= $(ROOTDIR)/.uv-cache
+export UV_CACHE_DIR
+
 # Check if uv is available
 HAS_UV := $(shell command -v uv 2>/dev/null)
 

@@ -79,7 +79,8 @@ class CustomSACConfig(SACConfig, FrameworkConfigMixin):
     @override(SACConfig)
     def build(self, *args: Any, **kwargs: Any) -> Any:
         self._apply_framework_runtime_config()
-        return super().build(*args, **kwargs)
+        algorithm = super().build(*args, **kwargs)
+        return self._restore_framework_checkpoint(algorithm)
 
     @override(SACConfig)
     def validate(self) -> None:
