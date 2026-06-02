@@ -32,6 +32,7 @@ import os
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -189,7 +190,8 @@ class FrameworkConfigMixin:
                 value=run_id,
             )
 
-        self._run_name = name.strip()
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        self._run_name = f"{name.strip()}_{timestamp}"
         self._run_root_dir = root_dir.strip()
         self._run_id = run_id.strip() if isinstance(run_id, str) else None
         self._run_auto_logger = bool(auto_logger)
