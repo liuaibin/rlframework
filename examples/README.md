@@ -10,6 +10,7 @@ Quick-start examples showing how to use each part of the framework.
 | [02_sac_pendulum.py](02_sac_pendulum.py) | SAC | File metrics, optional InfluxDB, managed checkpointing |
 | [03_custom_algorithm.py](03_custom_algorithm.py) | Custom PPO | Hook overrides, curriculum learning, gradient clipping |
 | [04_full_production.py](04_full_production.py) | SAC | MinIO + InfluxDB + Prometheus production setup |
+| [08_async_sac_pendulum_resume_eval.py](08_async_sac_pendulum_resume_eval.py) | Async SAC | Async SAC pipeline, parallel evaluation, resume_from checkpoint |
 | [10_batch_evict_episode_replay_buffer.py](10_batch_evict_episode_replay_buffer.py) | SAC | BatchEvictEpisodeReplayBuffer behavior check + SAC integration |
 
 ---
@@ -91,6 +92,22 @@ Environment variables:
 | `INFLUXDB_BUCKET` | `metrics` | InfluxDB bucket |
 | `INFLUXDB_TOKEN` | `my-super-secret-token` | InfluxDB auth token |
 | `PROMETHEUS_GW` | `localhost:9091` | Prometheus push gateway |
+
+---
+
+### Example 8 — Async SAC with Parallel Evaluation and Resume
+
+```bash
+# Start fresh
+python examples/08_async_sac_pendulum_resume_eval.py
+
+# Resume from an existing RLlib checkpoint directory
+RESUME_FROM=./runs/async_sac_pendulum_2026_06_02_17_30_00/checkpoints/iter_000020 \
+python examples/08_async_sac_pendulum_resume_eval.py
+```
+
+This example uses `AsyncCustomSACConfig`, RLlib parallel evaluation, and
+`.resume_from(...)` when `RESUME_FROM` is provided.
 
 ---
 
