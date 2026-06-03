@@ -210,6 +210,39 @@ class TestAlgorithmConfigs:
         cfg._apply_framework_runtime_config()
         assert cfg.callbacks_class is _UserCallback
 
+    def test_framework_run_layout_defaults_are_absolute(self, tmp_dir, monkeypatch):
+        from pathlib import Path
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.callbacks import FrameworkCallback
+
+        project_dir = tmp_dir / "external_project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        cfg = (
+            CustomPPOConfig()
+            .framework_run("probe", root_dir="./runs")
+            .framework_checkpointing(freq=5)
+            .metrics(reporters=["file"])
+            .storage()
+        )
+        cfg._apply_framework_runtime_config()
+        layout = cfg.framework_layout
+        assert layout is not None
+
+        assert layout.run_dir.is_absolute()
+        assert layout.run_dir.parent == (project_dir / "runs").resolve()
+        assert layout.run_dir.name.startswith("probe_")
+        assert Path(cfg._checkpoint_local_dir) == layout.checkpoint_dir
+        assert Path(cfg._metrics_reporter_configs["file"]["filepath"]).is_absolute()
+        assert Path(cfg._metrics_reporter_configs["file"]["filepath"]).parent == layout.metrics_dir
+        assert Path(cfg._storage_backend_config["root"]) == layout.storage_dir
+
+        callback = cfg.callbacks_class()
+        assert isinstance(callback, FrameworkCallback)
+        assert Path(callback._ckpt_local_dir) == layout.checkpoint_dir
+
     def test_checkpointing_upload_async_is_passed_to_manager(self):
         from rlframework.algorithms.ppo import CustomPPOConfig
 

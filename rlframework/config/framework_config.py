@@ -352,7 +352,7 @@ class FrameworkConfigMixin:
         if self._framework_run_layout is not None:
             return self._framework_run_layout
 
-        run_dir = Path(self._run_root_dir).expanduser() / self._run_name
+        run_dir = (Path(self._run_root_dir).expanduser() / self._run_name).resolve()
         if self._run_id is not None:
             run_dir = run_dir / self._run_id
 
