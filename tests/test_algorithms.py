@@ -176,6 +176,108 @@ class TestAlgorithmConfigs:
             )
             cfg.validate()
 
+    def test_async_sac_algorithm_options_rejects_invalid_mode(self):
+        import pytest
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+
+        with pytest.raises(ValueError, match="env_sampling"):
+            AsyncCustomSACConfig().algorithm_options({"env_sampling": "invalid"})
+
+    def test_algorithm_options_rejects_unknown_base_option(self):
+        import pytest
+
+        from rlframework.algorithms.ppo import CustomPPOConfig
+        from rlframework.utils.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="Unknown algorithm option"):
+            CustomPPOConfig().algorithm_options({"unknown": True})
+
+    def test_async_sac_algorithm_options_rejects_unknown_option(self):
+        import pytest
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+        from rlframework.utils.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="Unknown AsyncCustomSAC algorithm option"):
+            AsyncCustomSACConfig().algorithm_options({"unknown": True})
+
+    def test_async_sac_algorithm_options_accepts_pipeline_log_interval(self):
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+
+        cfg = AsyncCustomSACConfig().algorithm_options({"pipeline_log_interval": 25})
+
+        assert cfg.async_pipeline_log_interval == 25
+
+    def test_async_sac_algorithm_options_rejects_bad_pipeline_log_interval(self):
+        import pytest
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+        from rlframework.utils.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="pipeline_log_interval"):
+            AsyncCustomSACConfig().algorithm_options({"pipeline_log_interval": -1})
+
+    def test_async_sac_explicit_async_env_requires_ray_254_api(self):
+        import pytest
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+
+        cfg = (
+            AsyncCustomSACConfig()
+            .training(replay_buffer_config={"type": "EpisodeReplayBuffer", "capacity": 1000})
+            .algorithm_options({"env_sampling": "async", "learner_training": "sync"})
+        )
+
+        with pytest.raises(ValueError, match="env_sampling='async'"):
+            cfg.validate()
+
+    def test_async_sac_async_env_sync_learner_allows_local_learner(self, monkeypatch):
+        from rlframework.algorithms import async_sac
+
+        monkeypatch.setattr(async_sac, "_supports_async_env_runner_fetch_ready", lambda: True)
+
+        cfg = (
+            async_sac.AsyncCustomSACConfig()
+            .training(replay_buffer_config={"type": "EpisodeReplayBuffer", "capacity": 1000})
+            .learners(num_learners=0, num_gpus_per_learner=0)
+            .algorithm_options({"env_sampling": "async", "learner_training": "sync"})
+        )
+
+        cfg.validate()
+        assert cfg._dont_auto_sync_env_runner_states is True
+
+    def test_async_sac_async_learner_requires_remote_learner(self, monkeypatch):
+        import pytest
+
+        from rlframework.algorithms import async_sac
+
+        monkeypatch.setattr(async_sac, "_supports_async_env_runner_fetch_ready", lambda: True)
+
+        cfg = (
+            async_sac.AsyncCustomSACConfig()
+            .training(replay_buffer_config={"type": "EpisodeReplayBuffer", "capacity": 1000})
+            .learners(num_learners=0, num_gpus_per_learner=0)
+            .algorithm_options({"env_sampling": "async", "learner_training": "async"})
+        )
+
+        with pytest.raises(ValueError, match="num_learners > 0"):
+            cfg.validate()
+
+    def test_async_sac_sync_env_disables_manual_env_state_sync(self, monkeypatch):
+        from rlframework.algorithms import async_sac
+
+        monkeypatch.setattr(async_sac, "_supports_async_env_runner_fetch_ready", lambda: True)
+
+        cfg = (
+            async_sac.AsyncCustomSACConfig()
+            .training(replay_buffer_config={"type": "EpisodeReplayBuffer", "capacity": 1000})
+            .algorithm_options({"env_sampling": "sync", "learner_training": "sync"})
+        )
+
+        cfg.validate()
+        assert cfg._dont_auto_sync_env_runner_states is False
+
     def test_metrics_auto_wires_framework_callback_factory(self, tmp_dir):
         from rlframework.algorithms.ppo import CustomPPOConfig
         from rlframework.callbacks import FrameworkCallback

@@ -28,6 +28,7 @@ Alternatively, use the algorithm-specific configs (:class:`CustomPPOConfig`,
 :class:`CustomSACConfig`) which already include this mixin.
 """
 
+import copy
 import os
 import warnings
 from collections.abc import Callable
@@ -100,6 +101,7 @@ class FrameworkConfigMixin:
         self._framework_managed_logger_creator: Callable[[Any], Any] | None = None
         self._warned_custom_logger_creator: bool = False
         self._resume_checkpoint_path: str | None = None
+        self._framework_algorithm_options: dict[str, Any] = {}
 
     def _validate_framework_config(self) -> None:
         """Validate framework and training config parameters.
@@ -149,6 +151,48 @@ class FrameworkConfigMixin:
         self._storage_upload_async = upload_async
         self._best_upload_freq = max(0, best_upload_freq)
         return self
+
+    def algorithm_options(
+        self,
+        options: dict[str, Any],
+        *,
+        strict: bool = True,
+    ) -> "FrameworkConfigMixin":
+        """Configure algorithm-specific rlframework options through one dict.
+
+        Each algorithm config can consume its own option keys by overriding
+        :meth:`_apply_algorithm_options`. The base mixin rejects all keys in
+        strict mode, so typos fail fast by default.
+        """
+        if not isinstance(options, dict):
+            raise ValidationError(
+                "algorithm_options options must be a dict",
+                field="algorithm_options",
+                value=options,
+            )
+
+        options_copy = copy.deepcopy(options)
+        self._apply_algorithm_options(options_copy, strict=strict)
+        self._framework_algorithm_options.update(options_copy)
+        return self
+
+    def _apply_algorithm_options(
+        self,
+        options: dict[str, Any],
+        *,
+        strict: bool = True,
+    ) -> None:
+        """Apply algorithm-specific options.
+
+        Subclasses should override this method and consume their supported keys.
+        """
+        if strict and options:
+            unknown = ", ".join(sorted(options))
+            raise ValidationError(
+                f"Unknown algorithm option(s): {unknown}",
+                field="algorithm_options",
+                value=options,
+            )
 
     def framework_run(
         self,

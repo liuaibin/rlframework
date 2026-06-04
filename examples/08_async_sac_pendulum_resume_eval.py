@@ -15,7 +15,10 @@ Resume from a checkpoint:
 
 Notes:
 - On Ray >= 2.54, AsyncCustomSAC uses non-blocking EnvRunner sampling and async
-  Learner updates. Older Ray versions fall back to the parent SAC training loop.
+  Learner updates by default. Use ``.algorithm_options({"env_sampling": "async",
+  "learner_training": "sync"})`` to test async sampling with synchronous training.
+  Add ``"pipeline_log_interval": 100`` to emit periodic async pipeline logs.
+  Older Ray versions fall back to the parent SAC training loop.
 - ``evaluation_parallel_to_training=True`` overlaps evaluation with training.
   ``evaluation_duration="auto"`` keeps evaluation from intentionally running
   longer than the parallel training iteration.
@@ -78,6 +81,7 @@ config = (
         num_gpus_per_learner=0,
         max_requests_in_flight_per_learner=1,
     )
+    .algorithm_options({"env_sampling": "async", "learner_training": "async"})
     .evaluation(
         evaluation_interval=1,
         evaluation_parallel_to_training=True,
