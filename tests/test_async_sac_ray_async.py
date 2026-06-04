@@ -74,15 +74,39 @@ def _async_sac_config(*, learner_training: str, num_learners: int) -> AsyncCusto
     )
 
 
-def _wait_for_async_sample(algo, *, attempts: int = 20) -> int:
-    """Poll the non-blocking async sampler until one sample result is ready."""
-    total_steps = 0
-    for _ in range(attempts):
-        total_steps += algo._fetch_ready_samples_and_reissue()
+def _wait_for_async_sample(algo, *, timeout_s: float = 10.0) -> int:
+    """Prime the async sampler, then fetch the first ready result without reissuing."""
+    total_steps = algo._fetch_ready_samples_and_reissue()
+    if algo._latest_connector_states_by_actor:
+        return total_steps
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        remaining = max(deadline - time.monotonic(), 0.0)
+        total_steps += algo._fetch_ready_samples_only(
+            timeout_seconds=min(0.5, remaining),
+        )
         if algo._latest_connector_states_by_actor:
             return total_steps
-        time.sleep(0.1)
-    return total_steps
+
+    raise AssertionError(
+        f"Timed out waiting for async EnvRunner sample; inflight={algo._env_sample_inflight()}"
+    )
+
+
+def _drain_async_samples_before_stop(algo, *, timeout_s: float = 5.0) -> None:
+    """Drain the in-flight async sample request so Ray actor shutdown stays bounded."""
+    deadline = time.monotonic() + timeout_s
+    while algo._env_sample_inflight() > 0 and time.monotonic() < deadline:
+        remaining = max(deadline - time.monotonic(), 0.0)
+        algo._fetch_ready_samples_only(timeout_seconds=min(0.5, remaining))
+
+
+def _stop_algo(algo) -> None:
+    try:
+        _drain_async_samples_before_stop(algo)
+    finally:
+        algo.stop()
 
 
 def test_ray_async_env_runner_fetches_ready_samples(ray_runtime):
@@ -97,7 +121,7 @@ def test_ray_async_env_runner_fetches_ready_samples(ray_runtime):
         assert algo._latest_connector_states_by_actor
         assert algo._env_sample_inflight() >= 0
     finally:
-        algo.stop()
+        _stop_algo(algo)
 
 
 def test_ray_async_learner_update_creates_inflight_request(ray_runtime):
@@ -115,4 +139,4 @@ def test_ray_async_learner_update_creates_inflight_request(ray_runtime):
         assert algo._train_credit == 0.0
         assert algo._learner_inflight() == 1
     finally:
-        algo.stop()
+        _stop_algo(algo)

@@ -770,9 +770,35 @@ class AsyncCustomSAC(CustomSAC):
             return 0
         return worker_manager.num_outstanding_async_reqs()
 
-    def _fetch_ready_samples_and_reissue(self) -> int:
-        """Fetch previously ready EnvRunner samples and immediately issue the next
-        async sample call.
+    def _fetch_ready_samples_and_reissue(
+        self,
+        *,
+        timeout_seconds: float | None = 0.0,
+    ) -> int:
+        """Fetch ready EnvRunner samples and immediately issue the next async sample."""
+        return self._fetch_ready_samples(
+            timeout_seconds=timeout_seconds,
+            reissue=True,
+        )
+
+    def _fetch_ready_samples_only(
+        self,
+        *,
+        timeout_seconds: float | None = 0.0,
+    ) -> int:
+        """Fetch ready EnvRunner samples without issuing another async sample call."""
+        return self._fetch_ready_samples(
+            timeout_seconds=timeout_seconds,
+            reissue=False,
+        )
+
+    def _fetch_ready_samples(
+        self,
+        *,
+        timeout_seconds: float | None,
+        reissue: bool,
+    ) -> int:
+        """Fetch ready EnvRunner samples, optionally reissuing the next request.
 
         This is the core of the IMPALA-style pipeline: we never block waiting
         for a sample to finish. Instead, each training_step call:
@@ -780,8 +806,8 @@ class AsyncCustomSAC(CustomSAC):
         2. Starts the next async sample (to be collected next call).
         3. Collects connector states for later weight broadcast.
 
-        With max_requests_in_flight_per_env_runner=1, each EnvRunner always
-        has exactly one pending sample request.
+        With max_requests_in_flight_per_env_runner=1 and ``reissue=True``, each
+        EnvRunner always has exactly one pending sample request.
 
         Returns:
             Total number of env steps newly added to the replay buffer this call.
@@ -801,12 +827,18 @@ class AsyncCustomSAC(CustomSAC):
 
         if num_healthy_remote_workers > 0:
             with metrics_logger.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
-                results = env_runner_group.foreach_env_runner_async_fetch_ready(
-                    func="sample_get_state_and_metrics",
-                    tag=_ASYNC_SAMPLE_TAG,
-                    timeout_seconds=0.0,
-                    return_actor_ids=True,
-                )
+                if reissue:
+                    results = env_runner_group.foreach_env_runner_async_fetch_ready(
+                        func="sample_get_state_and_metrics",
+                        tag=_ASYNC_SAMPLE_TAG,
+                        timeout_seconds=timeout_seconds,
+                        return_actor_ids=True,
+                    )
+                else:
+                    results = env_runner_group.fetch_ready_async_reqs(
+                        tags=_ASYNC_SAMPLE_TAG,
+                        timeout_seconds=timeout_seconds,
+                    )
 
             # Fetch and process results.
             for actor_id, (episodes_ref, connector_state, metrics) in results:
@@ -820,7 +852,7 @@ class AsyncCustomSAC(CustomSAC):
                     replay_buffer.add(episodes)
 
                 metrics_logger.aggregate([metrics], key=ENV_RUNNER_RESULTS)
-        else:
+        elif reissue:
             env_runner = cast(Any, self.env_runner)
             if env_runner is None:
                 return 0

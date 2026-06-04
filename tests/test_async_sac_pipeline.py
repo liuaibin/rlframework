@@ -74,6 +74,7 @@ class _EnvRunnerGroup:
         self.healthy_remote_workers = healthy_remote_workers
         self._worker_manager = worker_manager or _WorkerManager()
         self.async_fetch_calls = []
+        self.fetch_ready_calls = []
         self.sync_calls = []
 
     def num_healthy_remote_workers(self):
@@ -81,6 +82,10 @@ class _EnvRunnerGroup:
 
     def foreach_env_runner_async_fetch_ready(self, **kwargs):
         self.async_fetch_calls.append(kwargs)
+        return self.ready_results
+
+    def fetch_ready_async_reqs(self, **kwargs):
+        self.fetch_ready_calls.append(kwargs)
         return self.ready_results
 
     def sync_env_runner_states(self, **kwargs):
@@ -161,6 +166,41 @@ def test_async_fetch_ready_samples_adds_to_replay_and_caches_connector_state(mon
     assert algo.metrics.latest("async_sac_env_ready_results") == 1
     assert algo.metrics.latest("async_sac_env_steps_added") == 7
     assert algo.metrics.latest("async_sac_env_sample_inflight_after_reissue") == 1
+
+
+def test_async_fetch_ready_samples_only_does_not_reissue(monkeypatch):
+    from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
+
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    episodes = [_Episode(2)]
+    connector_state = {"connector": "state-1"}
+    env_metrics = {"episode_return_mean": 1.0}
+    env_group = _EnvRunnerGroup(
+        ready_results=[("actor-1", (episodes, connector_state, env_metrics))],
+        worker_manager=_WorkerManager(outstanding=1),
+    )
+    replay_buffer = _ReplayBuffer()
+    algo = _make_algo()
+    algo.env_runner_group = env_group
+    algo.local_replay_buffer = replay_buffer
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    new_steps = AsyncCustomSAC._fetch_ready_samples_only(algo, timeout_seconds=0.5)
+
+    assert new_steps == 2
+    assert replay_buffer.added == [episodes]
+    assert algo._latest_connector_states_by_actor == {"actor-1": connector_state}
+    assert env_group.async_fetch_calls == []
+    assert env_group.fetch_ready_calls == [
+        {
+            "tags": "async_sac_sample",
+            "timeout_seconds": 0.5,
+        }
+    ]
+    assert algo.metrics.aggregates == [([env_metrics], ENV_RUNNER_RESULTS)]
 
 
 def test_async_env_sync_learner_uses_sync_update_when_credit_available():
