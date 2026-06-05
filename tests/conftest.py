@@ -40,5 +40,6 @@ def sample_metrics():
                 "entropy": 0.65,
             }
         },
+        "time_this_iter_s": 3.5,
         "num_env_steps_trained": 4000,
     }

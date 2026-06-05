@@ -25,6 +25,9 @@ pytestmark = pytest.mark.skipif(
 def ray_runtime(monkeypatch: pytest.MonkeyPatch):
     if ray.is_initialized():
         ray.shutdown()
+    # These smoke tests intentionally run CPU-only learners. If the host has
+    # GPUs visible, Ray Train may attempt CUDA cleanup for a CPU device.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     monkeypatch.setenv("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
     ray.init(
         ignore_reinit_error=True,

@@ -212,6 +212,7 @@ class FrameworkCallback(RLlibCallback):
         flat: dict[str, Any] = {}
         flat["training_iteration"] = result.get("training_iteration", 0)
         flat["time_total_s"] = result.get("time_total_s", 0.0)
+        flat["time_this_iter_s"] = result.get("time_this_iter_s", 0.0)
 
         env_runners = result.get(ENV_RUNNER_RESULTS, {})
         flat["episode_return_mean"] = env_runners.get(EPISODE_RETURN_MEAN, 0.0)
@@ -234,6 +235,7 @@ class FrameworkCallback(RLlibCallback):
         known_top_level = {
             "training_iteration",
             "time_total_s",
+            "time_this_iter_s",
             "num_env_steps_sampled_lifetime",
             "num_env_steps_trained_lifetime",
             ENV_RUNNER_RESULTS,

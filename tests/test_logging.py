@@ -111,6 +111,8 @@ class TestFrameworkCallback:
         assert any("episode_return_mean" in k for k in flat)
         # Should keep numeric env-level custom metrics.
         assert flat["num_episodes"] == 10
+        # Should keep per-iteration wall time from Ray Trainable.
+        assert flat["time_this_iter_s"] == 3.5
 
     def test_with_reporters_accepts_empty_list(self):
         from rlframework.callbacks import FrameworkCallback
