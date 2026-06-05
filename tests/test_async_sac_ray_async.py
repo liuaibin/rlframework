@@ -22,9 +22,10 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def ray_runtime():
+def ray_runtime(monkeypatch: pytest.MonkeyPatch):
     if ray.is_initialized():
         ray.shutdown()
+    monkeypatch.setenv("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
     ray.init(
         ignore_reinit_error=True,
         include_dashboard=False,
