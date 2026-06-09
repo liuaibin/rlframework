@@ -174,6 +174,7 @@ class AsyncCustomSACConfig(CustomSACConfig):
         self.async_env_sampling: AsyncPipelineMode = "auto"
         self.async_learner_training: AsyncPipelineMode = "auto"
         self.async_pipeline_log_interval: int = 0
+        self.async_max_sync_learner_updates_per_step: int | None = None
 
         # AsyncCustomSAC owns EnvRunner state/weight sync only when the async
         # EnvRunner sampling path is selected. Older Ray versions and explicit sync
@@ -208,6 +209,7 @@ class AsyncCustomSACConfig(CustomSACConfig):
         supported = {
             "env_sampling",
             "learner_training",
+            "max_sync_learner_updates_per_step",
             "pipeline_log_interval",
         }
         unknown = set(options) - supported
@@ -228,6 +230,13 @@ class AsyncCustomSACConfig(CustomSACConfig):
                 "pipeline_log_interval",
                 options["pipeline_log_interval"],
             )
+        if "max_sync_learner_updates_per_step" in options:
+            self.async_max_sync_learner_updates_per_step = (
+                self._validate_optional_positive_int_option(
+                    "max_sync_learner_updates_per_step",
+                    options["max_sync_learner_updates_per_step"],
+                )
+            )
 
     @staticmethod
     def _validate_async_pipeline_mode(
@@ -243,6 +252,18 @@ class AsyncCustomSACConfig(CustomSACConfig):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValidationError(
                 f"`{name}` must be a non-negative integer.",
+                field=f"algorithm_options.{name}",
+                value=value,
+            )
+        return value
+
+    @staticmethod
+    def _validate_optional_positive_int_option(name: str, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValidationError(
+                f"`{name}` must be a positive integer or None.",
                 field=f"algorithm_options.{name}",
                 value=value,
             )
@@ -284,6 +305,10 @@ class AsyncCustomSACConfig(CustomSACConfig):
         self.async_pipeline_log_interval = self._validate_non_negative_int_option(
             "pipeline_log_interval",
             self.async_pipeline_log_interval,
+        )
+        self.async_max_sync_learner_updates_per_step = self._validate_optional_positive_int_option(
+            "max_sync_learner_updates_per_step",
+            self.async_max_sync_learner_updates_per_step,
         )
         self._update_auto_sync_env_runner_states()
 
@@ -496,11 +521,13 @@ class AsyncCustomSAC(CustomSAC):
            Track connector_states for later broadcast.
         2. If Learner training is async, drain previously-ready learner results.
         3. Accumulate train credit only after warmup.
-        4. With available credit: run or issue at most one learner update per call.
+        4. With available credit: consume as many Learner updates as the selected
+           mode can safely accept.
         5. Call framework hooks and return results.
 
-        Only one learner update per training_step prevents in-flight saturation
-        and keeps EnvRunner ready-result polling frequent.
+        Sync Learner mode can drain multiple credits per call to match RLlib's
+        training-intensity semantics. Async Learner mode is bounded by the
+        LearnerGroup in-flight request limit.
         """
         self._async_training_step_count += 1
         new_env_steps = self._fetch_ready_samples_and_reissue()
@@ -538,7 +565,60 @@ class AsyncCustomSAC(CustomSAC):
         )
 
     def _maybe_run_sync_learner_update(self) -> None:
-        """Run one synchronous Learner update if train credit is available."""
+        """Run synchronous Learner updates while train credit is available."""
+        metrics_logger = cast(Any, self.metrics)
+        learner_group = cast(Any, self.learner_group)
+        max_updates = getattr(
+            cast(Any, self.config),
+            "async_max_sync_learner_updates_per_step",
+            None,
+        )
+        updates = 0
+        learner_results_batch: list[Any] = []
+
+        while self._train_credit >= 1.0 and (max_updates is None or updates < max_updates):
+            episodes = self._sample_from_replay_buffer()
+            learner_results = learner_group.update(
+                episodes=episodes,
+                async_update=False,
+                return_state=True,
+                timesteps=self._learner_timesteps(),
+            )
+            learner_results_batch.extend(learner_results)
+            self._train_credit -= 1.0
+            updates += 1
+
+        if updates > 0:
+            self._process_learner_results(learner_results_batch)
+
+        credit_blocked = updates == 0 and self._train_credit < 1.0
+        limit_reached = (
+            max_updates is not None and updates >= max_updates and self._train_credit >= 1.0
+        )
+        metrics_logger.log_value(
+            "async_sac_train_credit_blocked",
+            int(credit_blocked),
+            window=1,
+        )
+        metrics_logger.log_value(
+            "async_sac_sync_learner_update_limit_reached",
+            int(limit_reached),
+            window=1,
+        )
+
+        metrics_logger.log_value(
+            "async_sac_sync_learner_updates",
+            updates,
+            window=1,
+        )
+        metrics_logger.log_value(
+            "async_sac_train_credit_spent",
+            float(updates),
+            window=1,
+        )
+
+    def _maybe_issue_async_learner_update(self) -> None:
+        """Issue asynchronous Learner updates while credit and capacity allow."""
         metrics_logger = cast(Any, self.metrics)
         if self._train_credit < 1.0:
             metrics_logger.log_value(
@@ -546,44 +626,14 @@ class AsyncCustomSAC(CustomSAC):
                 1,
                 window=1,
             )
-            return
-        metrics_logger.log_value(
-            "async_sac_train_credit_blocked",
-            0,
-            window=1,
-        )
-
-        learner_group = cast(Any, self.learner_group)
-        episodes = self._sample_from_replay_buffer()
-
-        learner_results = learner_group.update(
-            episodes=episodes,
-            async_update=False,
-            return_state=True,
-            timesteps=self._learner_timesteps(),
-        )
-
-        self._process_learner_results(learner_results)
-        self._train_credit -= 1.0
-
-        metrics_logger.log_value(
-            "async_sac_sync_learner_updates",
-            1,
-            window=1,
-        )
-        metrics_logger.log_value(
-            "async_sac_train_credit_spent",
-            1.0,
-            window=1,
-        )
-
-    def _maybe_issue_async_learner_update(self) -> None:
-        """Issue one asynchronous Learner update if credit and capacity allow."""
-        metrics_logger = cast(Any, self.metrics)
-        if self._train_credit < 1.0:
             metrics_logger.log_value(
-                "async_sac_train_credit_blocked",
-                1,
+                "async_sac_async_learner_updates_issued",
+                0,
+                window=1,
+            )
+            metrics_logger.log_value(
+                "async_sac_train_credit_spent",
+                0.0,
                 window=1,
             )
             return
@@ -611,35 +661,43 @@ class AsyncCustomSAC(CustomSAC):
             max_in_flight,
             window=1,
         )
-        blocked_by_inflight = before_inflight >= max_in_flight
+
+        updates_issued = 0
+        learner_results_batch: list[Any] = []
+        blocked_by_inflight = False
+        while self._train_credit >= 1.0:
+            current_inflight = learner_group._worker_manager.num_outstanding_async_reqs()
+            if current_inflight >= max_in_flight:
+                blocked_by_inflight = True
+                break
+
+            episodes = self._sample_from_replay_buffer()
+            learner_results = learner_group.update(
+                episodes=episodes,
+                async_update=True,
+                return_state=True,
+                timesteps=self._learner_timesteps(),
+            )
+            learner_results_batch.extend(learner_results)
+            self._train_credit -= 1.0
+            updates_issued += 1
+
+        if updates_issued > 0:
+            self._process_learner_results(learner_results_batch)
+
         metrics_logger.log_value(
             "async_sac_learner_blocked_by_inflight",
             int(blocked_by_inflight),
             window=1,
         )
-        if blocked_by_inflight:
-            return
-
-        episodes = self._sample_from_replay_buffer()
-
-        learner_results = learner_group.update(
-            episodes=episodes,
-            async_update=True,
-            return_state=True,
-            timesteps=self._learner_timesteps(),
-        )
-
-        self._process_learner_results(learner_results)
-        self._train_credit -= 1.0
-
         metrics_logger.log_value(
             "async_sac_async_learner_updates_issued",
-            1,
+            updates_issued,
             window=1,
         )
         metrics_logger.log_value(
             "async_sac_train_credit_spent",
-            1.0,
+            float(updates_issued),
             window=1,
         )
         metrics_logger.log_value(

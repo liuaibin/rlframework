@@ -116,6 +116,7 @@ def _make_algo():
     algo.config = SimpleNamespace(
         num_learners=1,
         max_requests_in_flight_per_learner=1,
+        async_max_sync_learner_updates_per_step=None,
         async_pipeline_log_interval=0,
     )
     algo.metrics = _Metrics()
@@ -227,6 +228,50 @@ def test_async_env_sync_learner_uses_sync_update_when_credit_available():
     assert algo.metrics.latest("async_sac_train_credit_spent") == 1.0
 
 
+def test_sync_learner_drains_multiple_train_credits_and_processes_once():
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    learner_group = _LearnerGroup(update_results=[{"learner_stats": {"loss": 1.0}}])
+    processed = []
+    algo = _make_algo()
+    algo._use_async_learner_training = False
+    algo._train_credit = 2.5
+    algo.learner_group = learner_group
+    algo._sample_from_replay_buffer = lambda: [_Episode(5)]
+    algo._process_learner_results = processed.append
+
+    AsyncCustomSAC._maybe_run_sync_learner_update(algo)
+
+    assert len(learner_group.update_calls) == 2
+    assert all(call["async_update"] is False for call in learner_group.update_calls)
+    assert len(processed) == 1
+    assert len(processed[0]) == 2
+    assert algo._train_credit == 0.5
+    assert algo.metrics.latest("async_sac_sync_learner_updates") == 2
+    assert algo.metrics.latest("async_sac_train_credit_spent") == 2.0
+    assert algo.metrics.latest("async_sac_sync_learner_update_limit_reached") == 0
+
+
+def test_sync_learner_respects_per_step_update_limit():
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    learner_group = _LearnerGroup(update_results=[{"learner_stats": {"loss": 1.0}}])
+    algo = _make_algo()
+    algo.config.async_max_sync_learner_updates_per_step = 2
+    algo._use_async_learner_training = False
+    algo._train_credit = 3.0
+    algo.learner_group = learner_group
+    algo._sample_from_replay_buffer = lambda: [_Episode(5)]
+    algo._process_learner_results = lambda _results: None
+
+    AsyncCustomSAC._maybe_run_sync_learner_update(algo)
+
+    assert len(learner_group.update_calls) == 2
+    assert algo._train_credit == 1.0
+    assert algo.metrics.latest("async_sac_sync_learner_updates") == 2
+    assert algo.metrics.latest("async_sac_sync_learner_update_limit_reached") == 1
+
+
 def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
     from rlframework.algorithms.async_sac import AsyncCustomSAC
 
@@ -252,6 +297,33 @@ def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
     assert algo.metrics.latest("async_sac_learner_blocked_by_inflight") == 0
     assert algo.metrics.latest("async_sac_async_learner_updates_issued") == 1
     assert algo.metrics.latest("async_sac_learner_inflight_after_issue") == 1
+
+
+def test_async_learner_issues_until_inflight_capacity_is_full():
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    learner_group = _LearnerGroup(
+        worker_manager=_WorkerManager(outstanding=0),
+        update_results=[],
+    )
+    processed = []
+    algo = _make_algo()
+    algo.config.max_requests_in_flight_per_learner = 2
+    algo._train_credit = 3.0
+    algo.learner_group = learner_group
+    algo._sample_from_replay_buffer = lambda: [_Episode(5)]
+    algo._process_learner_results = processed.append
+
+    AsyncCustomSAC._maybe_issue_async_learner_update(algo)
+
+    assert len(learner_group.update_calls) == 2
+    assert all(call["async_update"] is True for call in learner_group.update_calls)
+    assert processed == [[]]
+    assert algo._train_credit == 1.0
+    assert algo.metrics.latest("async_sac_async_learner_updates_issued") == 2
+    assert algo.metrics.latest("async_sac_train_credit_spent") == 2.0
+    assert algo.metrics.latest("async_sac_learner_blocked_by_inflight") == 1
+    assert algo.metrics.latest("async_sac_learner_inflight_after_issue") == 2
 
 
 def test_async_learner_does_not_issue_update_when_inflight_is_full():
@@ -332,3 +404,21 @@ def test_process_learner_results_syncs_latest_connector_states():
     ]
     assert env_group.sync_calls[0]["rl_module_state"] == {"weights": "state"}
     assert env_group.sync_calls[0]["env_steps_sampled"] == 123
+
+
+def test_process_learner_results_syncs_only_latest_rl_module_state():
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    env_group = _EnvRunnerGroup(healthy_remote_workers=0)
+    algo = _make_algo()
+    algo.env_runner_group = env_group
+    algo._latest_connector_states_by_actor = {"actor-1": {"connector": "state-1"}}
+    learner_results = [
+        {"_rl_module_state_after_update": {"weights": "old"}, "default_policy": {}},
+        {"_rl_module_state_after_update": {"weights": "new"}, "default_policy": {}},
+    ]
+
+    AsyncCustomSAC._process_learner_results(algo, learner_results)
+
+    assert len(env_group.sync_calls) == 1
+    assert env_group.sync_calls[0]["rl_module_state"] == {"weights": "new"}

@@ -209,6 +209,13 @@ class TestAlgorithmConfigs:
 
         assert cfg.async_pipeline_log_interval == 25
 
+    def test_async_sac_algorithm_options_accepts_sync_learner_update_limit(self):
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+
+        cfg = AsyncCustomSACConfig().algorithm_options({"max_sync_learner_updates_per_step": 3})
+
+        assert cfg.async_max_sync_learner_updates_per_step == 3
+
     def test_async_sac_algorithm_options_rejects_bad_pipeline_log_interval(self):
         import pytest
 
@@ -217,6 +224,15 @@ class TestAlgorithmConfigs:
 
         with pytest.raises(ValidationError, match="pipeline_log_interval"):
             AsyncCustomSACConfig().algorithm_options({"pipeline_log_interval": -1})
+
+    def test_async_sac_algorithm_options_rejects_bad_sync_learner_update_limit(self):
+        import pytest
+
+        from rlframework.algorithms.async_sac import AsyncCustomSACConfig
+        from rlframework.utils.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="max_sync_learner_updates_per_step"):
+            AsyncCustomSACConfig().algorithm_options({"max_sync_learner_updates_per_step": 0})
 
     def test_async_sac_explicit_async_env_requires_ray_254_api(self):
         import pytest

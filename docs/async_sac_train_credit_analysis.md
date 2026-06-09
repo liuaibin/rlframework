@@ -2,6 +2,17 @@
 
 本文档记录 `AsyncCustomSAC` 中 `async_sac_train_credit` 持续增长的问题分析，以及它和 RLlib 原版 SAC/DQN `calculate_rr_weights()` 训练强度语义之间的关系。
 
+## 实施状态
+
+截至 2026-06-09，本文中的主要建议已经落地到 `rlframework/algorithms/async_sac.py`：
+
+- `learner_training="sync"` 时会按 train credit 连续执行多次 learner update，并通过 `max_sync_learner_updates_per_step` 支持可选上限；
+- sync learner 多次 update 的 learner results 会聚合处理，EnvRunner 权重只使用最新 RLModule state 同步一次；
+- `learner_training="async"` 时会按 train credit 连续发起 learner update，直到 Learner in-flight 达到 `max_requests_in_flight_per_learner`；
+- `async_sac_sync_learner_updates`、`async_sac_async_learner_updates_issued` 和 `async_sac_train_credit_spent` 现在可以大于 1，表示单个 async training step 内消费了多个 train credit。
+
+后文“当前 AsyncCustomSAC”的描述保留为问题分析背景，其中“每次最多一次 update”的说法指优化前实现。
+
 ## 背景
 
 RLlib SAC 继承自 DQN，new API stack 的核心训练逻辑来自：
