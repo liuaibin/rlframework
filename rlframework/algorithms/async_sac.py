@@ -87,7 +87,9 @@ import ray
 from ray.rllib.algorithms.dqn.dqn import calculate_rr_weights
 from ray.rllib.core import (
     COMPONENT_ENV_TO_MODULE_CONNECTOR,
+    COMPONENT_LEARNER,
     COMPONENT_MODULE_TO_ENV_CONNECTOR,
+    COMPONENT_RL_MODULE,
 )
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.metrics import (
@@ -828,6 +830,24 @@ class AsyncCustomSAC(CustomSAC):
             return 0
         return worker_manager.num_outstanding_async_reqs()
 
+    def _fetch_latest_learner_rl_module_state_if_safe(self) -> Any | None:
+        """Fetch Learner weights when update results did not include them.
+
+        Generic RLlib Learners such as SAC accept ``return_state=True`` through
+        LearnerGroup, but do not currently attach ``_rl_module_state_after_update``
+        to their result dicts. Avoid this fallback while another async update is
+        in flight because the ``get_state`` actor call would queue behind it and
+        turn the async path into a blocking one.
+        """
+        if self._use_async_learner_training and self._learner_inflight() > 0:
+            return None
+
+        learner_state = cast(Any, self.learner_group).get_state(
+            components=COMPONENT_LEARNER + "/" + COMPONENT_RL_MODULE,
+            inference_only=True,
+        )
+        return learner_state[COMPONENT_LEARNER]
+
     def _fetch_ready_samples_and_reissue(
         self,
         *,
@@ -1026,6 +1046,25 @@ class AsyncCustomSAC(CustomSAC):
         # Use the latest connector states observed from each EnvRunner. Learner
         # results may become ready on a step with no ready EnvRunner samples.
         connector_states = list(self._latest_connector_states_by_actor.values())
+        if rl_module_state is None:
+            metrics_logger.log_value(
+                "async_sac_rl_module_state_missing",
+                1,
+                window=1,
+            )
+            rl_module_state = self._fetch_latest_learner_rl_module_state_if_safe()
+            metrics_logger.log_value(
+                "async_sac_rl_module_state_fallback_fetches",
+                int(rl_module_state is not None),
+                window=1,
+            )
+        else:
+            metrics_logger.log_value(
+                "async_sac_rl_module_state_missing",
+                0,
+                window=1,
+            )
+
         if rl_module_state is not None:
             metrics_logger.log_value(
                 "async_sac_weight_syncs",

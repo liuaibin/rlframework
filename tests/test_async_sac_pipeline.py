@@ -93,11 +93,20 @@ class _EnvRunnerGroup:
 
 
 class _LearnerGroup:
-    def __init__(self, *, worker_manager=None, update_results=None, ready_results=None):
+    def __init__(
+        self,
+        *,
+        worker_manager=None,
+        update_results=None,
+        ready_results=None,
+        state=None,
+    ):
         self._worker_manager = worker_manager or _WorkerManager()
         self.update_results = update_results if update_results is not None else []
         self.ready_results = ready_results if ready_results is not None else []
+        self.state = state if state is not None else {}
         self.update_calls = []
+        self.get_state_calls = []
 
     def update(self, **kwargs):
         self.update_calls.append(kwargs)
@@ -107,6 +116,10 @@ class _LearnerGroup:
 
     def _get_results(self, remote_results):
         return self.ready_results
+
+    def get_state(self, **kwargs):
+        self.get_state_calls.append(kwargs)
+        return self.state
 
 
 def _make_algo():
@@ -422,3 +435,60 @@ def test_process_learner_results_syncs_only_latest_rl_module_state():
 
     assert len(env_group.sync_calls) == 1
     assert env_group.sync_calls[0]["rl_module_state"] == {"weights": "new"}
+
+
+def test_process_learner_results_fetches_state_when_sac_learner_omits_return_state():
+    from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_RL_MODULE
+    from ray.rllib.utils.metrics import WEIGHTS_SEQ_NO
+
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    env_group = _EnvRunnerGroup(healthy_remote_workers=0)
+    learner_rl_module_state = {
+        COMPONENT_RL_MODULE: {"weights": "state"},
+        WEIGHTS_SEQ_NO: 7,
+    }
+    learner_group = _LearnerGroup(
+        state={COMPONENT_LEARNER: learner_rl_module_state},
+    )
+    algo = _make_algo()
+    algo._use_async_learner_training = False
+    algo.env_runner_group = env_group
+    algo.learner_group = learner_group
+    algo._latest_connector_states_by_actor = {"actor-1": {"connector": "state-1"}}
+    learner_result = {"default_policy": {"loss": 2.0}}
+
+    AsyncCustomSAC._process_learner_results(algo, [learner_result])
+
+    assert learner_group.get_state_calls == [
+        {
+            "components": f"{COMPONENT_LEARNER}/{COMPONENT_RL_MODULE}",
+            "inference_only": True,
+        }
+    ]
+    assert algo.metrics.latest("async_sac_rl_module_state_missing") == 1
+    assert algo.metrics.latest("async_sac_rl_module_state_fallback_fetches") == 1
+    assert env_group.sync_calls[0]["rl_module_state"] == learner_rl_module_state
+
+
+def test_process_learner_results_defers_state_fetch_while_async_update_inflight():
+    from ray.rllib.core import COMPONENT_LEARNER, COMPONENT_RL_MODULE
+
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    env_group = _EnvRunnerGroup(healthy_remote_workers=0)
+    learner_group = _LearnerGroup(
+        worker_manager=_WorkerManager(outstanding=1),
+        state={COMPONENT_LEARNER: {COMPONENT_RL_MODULE: {"weights": "state"}}},
+    )
+    algo = _make_algo()
+    algo.env_runner_group = env_group
+    algo.learner_group = learner_group
+    algo._latest_connector_states_by_actor = {"actor-1": {"connector": "state-1"}}
+
+    AsyncCustomSAC._process_learner_results(algo, [{"default_policy": {"loss": 2.0}}])
+
+    assert learner_group.get_state_calls == []
+    assert env_group.sync_calls == []
+    assert algo.metrics.latest("async_sac_rl_module_state_missing") == 1
+    assert algo.metrics.latest("async_sac_rl_module_state_fallback_fetches") == 0
