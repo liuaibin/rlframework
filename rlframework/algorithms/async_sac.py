@@ -570,7 +570,6 @@ class AsyncCustomSAC(CustomSAC):
     def _maybe_run_sync_learner_update(self) -> None:
         """Run synchronous Learner updates while train credit is available."""
         metrics_logger = cast(Any, self.metrics)
-        learner_group = cast(Any, self.learner_group)
         max_updates = getattr(
             cast(Any, self.config),
             "async_max_sync_learner_updates_per_step",
@@ -580,13 +579,9 @@ class AsyncCustomSAC(CustomSAC):
         learner_results_batch: list[Any] = []
 
         while self._train_credit >= 1.0 and (max_updates is None or updates < max_updates):
-            episodes = self._sample_from_replay_buffer()
             with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
-                learner_results = learner_group.update(
-                    episodes=episodes,
+                learner_results = self._update_learner_from_replay(
                     async_update=False,
-                    return_state=True,
-                    timesteps=self._learner_timesteps(),
                 )
             learner_results_batch.extend(learner_results)
             self._train_credit -= 1.0
@@ -675,13 +670,9 @@ class AsyncCustomSAC(CustomSAC):
                 blocked_by_inflight = True
                 break
 
-            episodes = self._sample_from_replay_buffer()
             with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
-                learner_results = learner_group.update(
-                    episodes=episodes,
+                learner_results = self._update_learner_from_replay(
                     async_update=True,
-                    return_state=True,
-                    timesteps=self._learner_timesteps(),
                 )
             learner_results_batch.extend(learner_results)
             self._train_credit -= 1.0
@@ -710,6 +701,133 @@ class AsyncCustomSAC(CustomSAC):
             learner_group._worker_manager.num_outstanding_async_reqs(),
             window=1,
         )
+
+    def _update_learner_from_replay(self, *, async_update: bool) -> list[Any]:
+        """Sample replay data and send it to the LearnerGroup.
+
+        When aggregator actors are enabled, Ray Learners deliberately skip building
+        their learner connector pipeline. In that mode, episodes must be converted by
+        AggregatorActor first and Learners must receive batch refs instead of episodes.
+        """
+        learner_group = cast(Any, self.learner_group)
+        if self._uses_aggregator_actors():
+            batch_refs = self._build_replay_batch_refs_with_aggregators()
+            return learner_group.update(
+                batch_refs=batch_refs,
+                async_update=async_update,
+                return_state=True,
+                timesteps=self._learner_timesteps(),
+            )
+
+        episodes = self._sample_from_replay_buffer()
+        return learner_group.update(
+            episodes=episodes,
+            async_update=async_update,
+            return_state=True,
+            timesteps=self._learner_timesteps(),
+        )
+
+    def _uses_aggregator_actors(self) -> bool:
+        """Return whether this run should route replay samples through aggregators."""
+        return getattr(cast(Any, self.config), "num_aggregator_actors_per_learner", 0) > 0
+
+    def _build_replay_batch_refs_with_aggregators(self) -> list[Any]:
+        """Convert replay-sampled episodes to one batch ref per Learner."""
+        aggregator_manager = getattr(self, "_aggregator_actor_manager", None)
+        if aggregator_manager is None:
+            raise RuntimeError(
+                "AsyncCustomSAC is configured with "
+                "`num_aggregator_actors_per_learner > 0`, but no AggregatorActor "
+                "manager was created by RLlib."
+            )
+
+        actor_ids_by_learner = self._aggregator_actor_ids_by_learner()
+        episode_packages = self._sample_replay_episode_packages_for_learners()
+        episode_refs = [ray.put(episodes) for episodes in episode_packages]
+        remote_results = aggregator_manager.foreach_actor(
+            "get_batch",
+            kwargs=[{"episode_refs": [episode_ref]} for episode_ref in episode_refs],
+            remote_actor_ids=actor_ids_by_learner,
+            return_obj_refs=True,
+        )
+
+        actor_to_learner = getattr(self, "_aggregator_actor_to_learner", None)
+        if actor_to_learner is None:
+            actor_to_learner = {
+                actor_id: learner_idx
+                for learner_idx, actor_id in enumerate(actor_ids_by_learner)
+            }
+
+        batch_refs_by_learner: list[Any | None] = [None] * len(actor_ids_by_learner)
+        for call_result in remote_results:
+            if not call_result.ok:
+                raise RuntimeError(
+                    "AggregatorActor failed while building an AsyncCustomSAC train batch: "
+                    f"{call_result.get()}"
+                )
+            learner_idx = actor_to_learner.get(call_result.actor_id)
+            if learner_idx is None or learner_idx >= len(batch_refs_by_learner):
+                raise RuntimeError(
+                    "AggregatorActor returned a batch for an unknown Learner index: "
+                    f"actor_id={call_result.actor_id}, mapping={actor_to_learner}"
+                )
+            batch_refs_by_learner[learner_idx] = call_result.get()
+
+        if any(batch_ref is None for batch_ref in batch_refs_by_learner):
+            raise RuntimeError(
+                "AggregatorActors did not produce one train batch per Learner. "
+                f"Received={batch_refs_by_learner}, actor_ids={actor_ids_by_learner}"
+            )
+
+        metrics_logger = cast(Any, self.metrics)
+        metrics_logger.log_value(
+            "async_sac_aggregator_batches",
+            len(batch_refs_by_learner),
+            window=1,
+        )
+        return cast(list[Any], batch_refs_by_learner)
+
+    def _aggregator_actor_ids_by_learner(self) -> list[int]:
+        """Choose one AggregatorActor for each Learner, ordered by Learner index."""
+        runtime_config = cast(Any, self.config)
+        num_learners = runtime_config.num_learners or 1
+        actor_to_learner = getattr(self, "_aggregator_actor_to_learner", None)
+        aggregator_manager = cast(Any, self._aggregator_actor_manager)
+
+        if actor_to_learner:
+            actor_ids_by_learner = []
+            for learner_idx in range(num_learners):
+                matching_actor_ids = sorted(
+                    actor_id
+                    for actor_id, mapped_learner_idx in actor_to_learner.items()
+                    if mapped_learner_idx == learner_idx
+                )
+                if not matching_actor_ids:
+                    raise RuntimeError(
+                        "No AggregatorActor is mapped to Learner "
+                        f"{learner_idx}; mapping={actor_to_learner}"
+                    )
+                actor_ids_by_learner.append(matching_actor_ids[0])
+            return actor_ids_by_learner
+
+        actor_ids = aggregator_manager.actor_ids()
+        if len(actor_ids) < num_learners:
+            raise RuntimeError(
+                "Not enough AggregatorActors for AsyncCustomSAC. "
+                f"Need {num_learners}, got {len(actor_ids)}."
+            )
+        return actor_ids[:num_learners]
+
+    def _sample_replay_episode_packages_for_learners(self) -> list[list[Any]]:
+        """Sample one per-Learner episode package from replay for aggregators."""
+        runtime_config = cast(Any, self.config)
+        num_learners = runtime_config.num_learners or 1
+        return [
+            self._sample_from_replay_buffer(
+                num_items=runtime_config.train_batch_size_per_learner,
+            )
+            for _ in range(num_learners)
+        ]
 
     def _learner_timesteps(self) -> dict[str, Any]:
         """Build the timestep metadata passed into LearnerGroup.update()."""
@@ -981,15 +1099,16 @@ class AsyncCustomSAC(CustomSAC):
         )
         return total_new_env_steps
 
-    def _sample_from_replay_buffer(self) -> list[Any]:
+    def _sample_from_replay_buffer(self, *, num_items: int | None = None) -> list[Any]:
         """Sample a batch of episodes from the local replay buffer."""
         runtime_config = cast(Any, self.config)
         metrics_logger = cast(Any, self.metrics)
         replay_buffer = cast(Any, self.local_replay_buffer)
+        num_items = num_items or runtime_config.total_train_batch_size
 
         with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)):
             episodes = replay_buffer.sample(
-                num_items=runtime_config.total_train_batch_size,
+                num_items=num_items,
                 n_step=runtime_config.n_step,
                 batch_length_T=(
                     self._module_is_stateful * runtime_config.model_config.get("max_seq_len", 0)

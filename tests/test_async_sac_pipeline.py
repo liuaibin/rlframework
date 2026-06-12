@@ -138,6 +138,30 @@ class _LearnerGroup:
         return self.state
 
 
+class _CallResult:
+    def __init__(self, actor_id, result, ok=True):
+        self.actor_id = actor_id
+        self.result = result
+        self.ok = ok
+
+    def get(self):
+        return self.result
+
+
+class _AggregatorManager:
+    def __init__(self, *, actor_ids=None, results=None):
+        self._actor_ids = actor_ids if actor_ids is not None else [0]
+        self.results = results if results is not None else [_CallResult(0, "batch-ref")]
+        self.foreach_calls = []
+
+    def actor_ids(self):
+        return self._actor_ids
+
+    def foreach_actor(self, *args, **kwargs):
+        self.foreach_calls.append((args, kwargs))
+        return self.results
+
+
 def _make_algo():
     from rlframework.algorithms.async_sac import AsyncCustomSAC
 
@@ -145,6 +169,8 @@ def _make_algo():
     algo.config = SimpleNamespace(
         num_learners=1,
         max_requests_in_flight_per_learner=1,
+        num_aggregator_actors_per_learner=0,
+        train_batch_size_per_learner=4,
         async_max_sync_learner_updates_per_step=None,
         async_pipeline_log_interval=0,
     )
@@ -415,6 +441,48 @@ def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
     assert algo.metrics.latest("async_sac_learner_blocked_by_inflight") == 0
     assert algo.metrics.latest("async_sac_async_learner_updates_issued") == 1
     assert algo.metrics.latest("async_sac_learner_inflight_after_issue") == 1
+
+
+def test_async_learner_routes_replay_through_aggregator_batch_refs(monkeypatch):
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    episodes = [_Episode(5)]
+    learner_group = _LearnerGroup(
+        worker_manager=_WorkerManager(outstanding=0),
+        update_results=[],
+    )
+    aggregator_manager = _AggregatorManager(
+        actor_ids=[0],
+        results=[_CallResult(0, "batch-ref")],
+    )
+    algo = _make_algo()
+    algo.config.num_aggregator_actors_per_learner = 1
+    algo._train_credit = 1.0
+    algo.learner_group = learner_group
+    algo._aggregator_actor_manager = aggregator_manager
+    algo._aggregator_actor_to_learner = {0: 0}
+    algo._sample_from_replay_buffer = lambda *, num_items=None: episodes
+    algo._process_learner_results = lambda _results: None
+    monkeypatch.setattr(async_sac.ray, "put", lambda value: "episode-ref")
+
+    AsyncCustomSAC._maybe_issue_async_learner_update(algo)
+
+    assert aggregator_manager.foreach_calls == [
+        (
+            ("get_batch",),
+            {
+                "kwargs": [{"episode_refs": ["episode-ref"]}],
+                "remote_actor_ids": [0],
+                "return_obj_refs": True,
+            },
+        )
+    ]
+    assert learner_group.update_calls[0]["batch_refs"] == ["batch-ref"]
+    assert "episodes" not in learner_group.update_calls[0]
+    assert learner_group.update_calls[0]["async_update"] is True
+    assert learner_group.update_calls[0]["return_state"] is True
+    assert algo.metrics.latest("async_sac_aggregator_batches") == 1
 
 
 def test_async_learner_issues_until_inflight_capacity_is_full():
