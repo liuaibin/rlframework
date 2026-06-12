@@ -896,6 +896,7 @@ class AsyncCustomSAC(CustomSAC):
         metrics_logger = cast(Any, self.metrics)
         replay_buffer = cast(Any, self.local_replay_buffer)
         num_healthy_remote_workers = env_runner_group.num_healthy_remote_workers()
+        ready_episode_batches: list[list[Any]] = []
 
         metrics_logger.log_value(
             "async_sac_remote_env_runners_healthy",
@@ -923,11 +924,9 @@ class AsyncCustomSAC(CustomSAC):
                 episodes = ray.get(episodes_ref)
                 env_step_count = self._count_episode_env_steps(episodes)
                 total_new_env_steps += env_step_count
+                ready_episode_batches.append(episodes)
                 self._latest_connector_states_by_actor[actor_id] = connector_state
                 ready_connector_state_count += 1
-
-                with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
-                    replay_buffer.add(episodes)
 
                 metrics_logger.aggregate([metrics], key=ENV_RUNNER_RESULTS)
         elif reissue:
@@ -941,9 +940,7 @@ class AsyncCustomSAC(CustomSAC):
                 env_runner_metrics = env_runner.get_metrics()
                 env_step_count = self._count_episode_env_steps(episodes)
                 total_new_env_steps += env_step_count
-
-            with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
-                replay_buffer.add(episodes)
+                ready_episode_batches.append(episodes)
 
             metrics_logger.aggregate([env_runner_metrics], key=ENV_RUNNER_RESULTS)
 
@@ -955,6 +952,14 @@ class AsyncCustomSAC(CustomSAC):
             )
             self._latest_connector_states_by_actor["local"] = local_connector_state
             ready_connector_state_count = 1
+
+        if ready_episode_batches:
+            episodes_to_add = [
+                episode for episodes in ready_episode_batches for episode in episodes
+            ]
+            # Batch the replay-buffer insert so eviction/index rebuild work happens once.
+            with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
+                replay_buffer.add(episodes_to_add)
 
         metrics_logger.log_value(
             "async_sac_env_steps_added",

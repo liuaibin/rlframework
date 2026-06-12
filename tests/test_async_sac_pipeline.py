@@ -182,6 +182,48 @@ def test_async_fetch_ready_samples_adds_to_replay_and_caches_connector_state(mon
     assert algo.metrics.latest("async_sac_env_sample_inflight_after_reissue") == 1
 
 
+def test_async_fetch_ready_samples_batches_replay_adds(monkeypatch):
+    from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
+
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    episodes_1 = [_Episode(3)]
+    episodes_2 = [_Episode(4), _Episode(5)]
+    connector_state_1 = {"connector": "state-1"}
+    connector_state_2 = {"connector": "state-2"}
+    env_metrics_1 = {"episode_return_mean": 1.0}
+    env_metrics_2 = {"episode_return_mean": 2.0}
+    env_group = _EnvRunnerGroup(
+        ready_results=[
+            ("actor-1", (episodes_1, connector_state_1, env_metrics_1)),
+            ("actor-2", (episodes_2, connector_state_2, env_metrics_2)),
+        ],
+        worker_manager=_WorkerManager(outstanding=2),
+    )
+    replay_buffer = _ReplayBuffer()
+    algo = _make_algo()
+    algo.env_runner_group = env_group
+    algo.local_replay_buffer = replay_buffer
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    new_steps = AsyncCustomSAC._fetch_ready_samples_and_reissue(algo)
+
+    assert new_steps == 12
+    assert replay_buffer.added == [episodes_1 + episodes_2]
+    assert algo._latest_connector_states_by_actor == {
+        "actor-1": connector_state_1,
+        "actor-2": connector_state_2,
+    }
+    assert algo.metrics.aggregates == [
+        ([env_metrics_1], ENV_RUNNER_RESULTS),
+        ([env_metrics_2], ENV_RUNNER_RESULTS),
+    ]
+    assert algo.metrics.latest("async_sac_env_ready_results") == 2
+    assert algo.metrics.latest("async_sac_env_steps_added") == 12
+
+
 def test_async_fetch_ready_samples_only_does_not_reissue(monkeypatch):
     from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 
