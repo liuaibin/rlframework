@@ -16,8 +16,10 @@ class _Metrics:
         self.peeks = peeks or {}
         self.values = []
         self.aggregates = []
+        self.time_keys = []
 
     def log_time(self, key):
+        self.time_keys.append(key)
         return _Timer()
 
     def log_value(self, key, value, window=None):
@@ -52,6 +54,20 @@ class _ReplayBuffer:
 
     def add(self, episodes):
         self.added.append(episodes)
+
+
+class _SamplingReplayBuffer:
+    def __init__(self, *, episodes=None, metrics=None):
+        self.episodes = episodes if episodes is not None else []
+        self.metrics = metrics if metrics is not None else {}
+        self.sample_calls = []
+
+    def sample(self, **kwargs):
+        self.sample_calls.append(kwargs)
+        return self.episodes
+
+    def get_metrics(self):
+        return self.metrics
 
 
 class _WorkerManager:
@@ -259,7 +275,50 @@ def test_async_fetch_ready_samples_only_does_not_reissue(monkeypatch):
     assert algo.metrics.aggregates == [([env_metrics], ENV_RUNNER_RESULTS)]
 
 
+def test_sample_from_replay_buffer_forwards_beta_from_replay_config():
+    from ray.rllib.utils.metrics import REPLAY_BUFFER_RESULTS, REPLAY_BUFFER_SAMPLE_TIMER, TIMERS
+
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    episodes = [_Episode(5)]
+    replay_metrics = {"buffer_size": 100}
+    replay_buffer = _SamplingReplayBuffer(episodes=episodes, metrics=replay_metrics)
+    algo = _make_algo()
+    algo.config = SimpleNamespace(
+        total_train_batch_size=256,
+        n_step=3,
+        model_config={"max_seq_len": 20},
+        burn_in_len=5,
+        gamma=0.95,
+        replay_buffer_config={"beta": 0.4},
+    )
+    algo.metrics = _Metrics()
+    algo.local_replay_buffer = replay_buffer
+    algo._module_is_stateful = True
+
+    sampled = AsyncCustomSAC._sample_from_replay_buffer(algo)
+
+    assert sampled == episodes
+    assert replay_buffer.sample_calls == [
+        {
+            "num_items": 256,
+            "n_step": 3,
+            "batch_length_T": 20,
+            "lookback": 1,
+            "min_batch_length_T": 5,
+            "gamma": 0.95,
+            "beta": 0.4,
+            "sample_episodes": True,
+        }
+    ]
+    assert algo.metrics.time_keys == [(TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)]
+    assert algo.metrics.aggregates == [([replay_metrics], REPLAY_BUFFER_RESULTS)]
+    assert algo.metrics.latest("async_sac_replay_sampled_episodes") == 1
+
+
 def test_async_env_sync_learner_uses_sync_update_when_credit_available():
+    from ray.rllib.utils.metrics import LEARNER_UPDATE_TIMER, TIMERS
+
     from rlframework.algorithms.async_sac import AsyncCustomSAC
 
     episodes = [_Episode(5)]
@@ -279,6 +338,7 @@ def test_async_env_sync_learner_uses_sync_update_when_credit_available():
     assert learner_group.update_calls[0]["return_state"] is True
     assert processed == [[{"learner_stats": {"loss": 1.0}}]]
     assert algo._train_credit == 0.0
+    assert algo.metrics.time_keys == [(TIMERS, LEARNER_UPDATE_TIMER)]
     assert algo.metrics.latest("async_sac_sync_learner_updates") == 1
     assert algo.metrics.latest("async_sac_train_credit_spent") == 1.0
 
@@ -328,6 +388,8 @@ def test_sync_learner_respects_per_step_update_limit():
 
 
 def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
+    from ray.rllib.utils.metrics import LEARNER_UPDATE_TIMER, TIMERS
+
     from rlframework.algorithms.async_sac import AsyncCustomSAC
 
     episodes = [_Episode(5)]
@@ -349,6 +411,7 @@ def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
     assert learner_group.update_calls[0]["return_state"] is True
     assert processed == [[]]
     assert algo._train_credit == 0.0
+    assert algo.metrics.time_keys == [(TIMERS, LEARNER_UPDATE_TIMER)]
     assert algo.metrics.latest("async_sac_learner_blocked_by_inflight") == 0
     assert algo.metrics.latest("async_sac_async_learner_updates_issued") == 1
     assert algo.metrics.latest("async_sac_learner_inflight_after_issue") == 1

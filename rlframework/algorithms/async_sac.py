@@ -97,6 +97,7 @@ from ray.rllib.utils.metrics import (
     ENV_RUNNER_RESULTS,
     ENV_RUNNER_SAMPLING_TIMER,
     LEARNER_RESULTS,
+    LEARNER_UPDATE_TIMER,
     NUM_AGENT_STEPS_SAMPLED_LIFETIME,
     NUM_ENV_STEPS_SAMPLED_LIFETIME,
     REPLAY_BUFFER_ADD_DATA_TIMER,
@@ -580,12 +581,13 @@ class AsyncCustomSAC(CustomSAC):
 
         while self._train_credit >= 1.0 and (max_updates is None or updates < max_updates):
             episodes = self._sample_from_replay_buffer()
-            learner_results = learner_group.update(
-                episodes=episodes,
-                async_update=False,
-                return_state=True,
-                timesteps=self._learner_timesteps(),
-            )
+            with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
+                learner_results = learner_group.update(
+                    episodes=episodes,
+                    async_update=False,
+                    return_state=True,
+                    timesteps=self._learner_timesteps(),
+                )
             learner_results_batch.extend(learner_results)
             self._train_credit -= 1.0
             updates += 1
@@ -674,12 +676,13 @@ class AsyncCustomSAC(CustomSAC):
                 break
 
             episodes = self._sample_from_replay_buffer()
-            learner_results = learner_group.update(
-                episodes=episodes,
-                async_update=True,
-                return_state=True,
-                timesteps=self._learner_timesteps(),
-            )
+            with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
+                learner_results = learner_group.update(
+                    episodes=episodes,
+                    async_update=True,
+                    return_state=True,
+                    timesteps=self._learner_timesteps(),
+                )
             learner_results_batch.extend(learner_results)
             self._train_credit -= 1.0
             updates_issued += 1
@@ -996,6 +999,7 @@ class AsyncCustomSAC(CustomSAC):
                     runtime_config.burn_in_len if hasattr(runtime_config, "burn_in_len") else 0
                 ),
                 gamma=runtime_config.gamma,
+                beta=runtime_config.replay_buffer_config.get("beta"),
                 sample_episodes=True,
             )
 
