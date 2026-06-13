@@ -15,11 +15,11 @@ The main staged rollout modes are:
 
 Architecture (Ray >= 2.54.0)::
 
-    EnvRunner 1..N  --async sample-->  episodes
+    EnvRunner 1..N  --async sample-->  episodes_ref
           ^                                  |
           | (sync weights + connector states)  | add
           |                                  v
-    LearnerGroup <--------------------  EpisodeReplayBuffer (local)
+    LearnerGroup <--------------------  EpisodeReplayBufferActor
           |
           | async_update=True
           v
@@ -130,6 +130,44 @@ _SUPPORTED_ASYNC_REPLAY_BUFFER_NAMES = {
     "BatchEvictEpisodeReplayBuffer",
     f"{BatchEvictEpisodeReplayBuffer.__module__}.{BatchEvictEpisodeReplayBuffer.__name__}",
 }
+
+
+def _count_episode_env_steps(episodes: list[Any]) -> int:
+    """Count env steps across episode-like objects without assuming an RLlib type."""
+    total = 0
+    for ep in episodes:
+        if hasattr(ep, "env_steps"):
+            steps = ep.env_steps
+            total += steps() if callable(steps) else steps
+        else:
+            total += len(ep)
+    return total
+
+
+class _AsyncSACReplayBufferActorImpl:
+    """Remote replay buffer that keeps large sampled episodes off the driver."""
+
+    def __init__(self, replay_buffer_config: dict[str, Any]) -> None:
+        from ray.rllib.utils.from_config import from_config
+        from ray.rllib.utils.replay_buffers.replay_buffer import ReplayBuffer
+
+        self.replay_buffer = from_config(ReplayBuffer, replay_buffer_config)
+
+    def add(self, episodes: list[Any]) -> int:
+        env_steps = _count_episode_env_steps(episodes)
+        self.replay_buffer.add(episodes)
+        return env_steps
+
+    def sample_episodes_ref(self, **kwargs: Any) -> tuple[Any, int, Any]:
+        episodes = self.replay_buffer.sample(**kwargs)
+        replay_buffer_results = self.replay_buffer.get_metrics()
+        return ray.put(episodes), len(episodes), replay_buffer_results
+
+    def get_metrics(self) -> Any:
+        return self.replay_buffer.get_metrics()
+
+
+_AsyncSACReplayBufferActor = ray.remote(num_cpus=0)(_AsyncSACReplayBufferActorImpl)
 
 
 def _supports_async_env_runner_fetch_ready() -> bool:
@@ -368,10 +406,9 @@ class AsyncCustomSAC(CustomSAC):
     - Delegates to CustomSAC/SAC/DQN's parent synchronous training_step().
     - Train credit is not used in this path.
 
-    NOTE: The local replay buffer is NOT thread-safe. On Ray >= 2.54.0, async
-    sampling writes to it from the main training thread only (foreach_env_runner_async_fetch_ready
-    returns in the same thread), so this is safe. On Ray < 2.54.0, sampling is
-    synchronous so this is also safe. The buffer should NOT be shared across threads.
+    NOTE: When async EnvRunner sampling uses remote Learners, replay is stored in a
+    ReplayBuffer actor so the driver can pass episode refs to LearnerGroup.update().
+    Local-Learner and Ray < 2.54.0 paths keep RLlib's local replay buffer behavior.
     """
 
     def __init__(self, config: AsyncCustomSACConfig, *args: Any, **kwargs: Any) -> None:
@@ -404,11 +441,25 @@ class AsyncCustomSAC(CustomSAC):
         self._train_credit = 0.0
         self._latest_connector_states_by_actor: dict[Any, Any] = {}
         self._async_training_step_count = 0
+        self._replay_buffer_actor = self._create_replay_buffer_actor_if_necessary(
+            runtime_config,
+        )
 
     @classmethod
     @override(CustomSAC)
     def get_default_config(cls) -> AsyncCustomSACConfig:
         return AsyncCustomSACConfig()
+
+    @override(CustomSAC)
+    def stop(self) -> None:
+        replay_buffer_actor = getattr(self, "_replay_buffer_actor", None)
+        if replay_buffer_actor is not None:
+            try:
+                ray.kill(replay_buffer_actor, no_restart=True)
+            except Exception:
+                logger.debug("Failed to kill AsyncCustomSAC replay buffer actor.", exc_info=True)
+            self._replay_buffer_actor = None
+        super().stop()
 
     # =======================================================================
     # Runtime mode resolution
@@ -446,6 +497,25 @@ class AsyncCustomSAC(CustomSAC):
         # Auto enables async Learner training only when Env sampling is async and
         # Learners are remote. A local Learner falls back to sync training.
         return self._use_async_env_sampling and runtime_config.num_learners > 0
+
+    def _create_replay_buffer_actor_if_necessary(self, runtime_config: Any) -> Any | None:
+        """Create a remote replay buffer when Learners are remote.
+
+        Keeping replay sampling in an actor lets the driver pass only episode refs into
+        LearnerGroup.update(), avoiding driver-side entity episode sharding.
+        """
+        if not self._use_async_env_sampling or runtime_config.num_learners <= 0:
+            return None
+
+        replay_buffer_config = dict(runtime_config.replay_buffer_config)
+        replay_buffer_config.setdefault(
+            "metrics_num_episodes_for_smoothing",
+            runtime_config.metrics_num_episodes_for_smoothing,
+        )
+        return _AsyncSACReplayBufferActor.remote(replay_buffer_config)
+
+    def _uses_replay_buffer_actor(self) -> bool:
+        return getattr(self, "_replay_buffer_actor", None) is not None
 
     # =======================================================================
     # Ray >= 2.54.0: Async EnvRunner sampling path
@@ -580,10 +650,16 @@ class AsyncCustomSAC(CustomSAC):
         learner_results_batch: list[Any] = []
 
         while self._train_credit >= 1.0 and (max_updates is None or updates < max_updates):
-            episodes = self._sample_from_replay_buffer()
+            if self._uses_replay_buffer_actor():
+                episode_refs = self._sample_from_replay_buffer_refs()
+                update_kwargs = {"episodes_refs": episode_refs}
+            else:
+                episodes = self._sample_from_replay_buffer()
+                update_kwargs = {"episodes": episodes}
+
             with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
                 learner_results = learner_group.update(
-                    episodes=episodes,
+                    **update_kwargs,
                     async_update=False,
                     return_state=True,
                     timesteps=self._learner_timesteps(),
@@ -675,10 +751,16 @@ class AsyncCustomSAC(CustomSAC):
                 blocked_by_inflight = True
                 break
 
-            episodes = self._sample_from_replay_buffer()
+            if self._uses_replay_buffer_actor():
+                episode_refs = self._sample_from_replay_buffer_refs()
+                update_kwargs = {"episodes_refs": episode_refs}
+            else:
+                episodes = self._sample_from_replay_buffer()
+                update_kwargs = {"episodes": episodes}
+
             with metrics_logger.log_time((TIMERS, LEARNER_UPDATE_TIMER)):
                 learner_results = learner_group.update(
-                    episodes=episodes,
+                    **update_kwargs,
                     async_update=True,
                     return_state=True,
                     timesteps=self._learner_timesteps(),
@@ -898,8 +980,10 @@ class AsyncCustomSAC(CustomSAC):
         env_runner_group = cast(Any, self.env_runner_group)
         metrics_logger = cast(Any, self.metrics)
         replay_buffer = cast(Any, self.local_replay_buffer)
+        replay_buffer_actor = getattr(self, "_replay_buffer_actor", None)
         num_healthy_remote_workers = env_runner_group.num_healthy_remote_workers()
         ready_episode_batches: list[list[Any]] = []
+        replay_add_refs: list[Any] = []
 
         metrics_logger.log_value(
             "async_sac_remote_env_runners_healthy",
@@ -924,10 +1008,13 @@ class AsyncCustomSAC(CustomSAC):
 
             # Fetch and process results.
             for actor_id, (episodes_ref, connector_state, metrics) in results:
-                episodes = ray.get(episodes_ref)
-                env_step_count = self._count_episode_env_steps(episodes)
-                total_new_env_steps += env_step_count
-                ready_episode_batches.append(episodes)
+                if replay_buffer_actor is not None:
+                    replay_add_refs.append(replay_buffer_actor.add.remote(episodes_ref))
+                else:
+                    episodes = ray.get(episodes_ref)
+                    env_step_count = self._count_episode_env_steps(episodes)
+                    total_new_env_steps += env_step_count
+                    ready_episode_batches.append(episodes)
                 self._latest_connector_states_by_actor[actor_id] = connector_state
                 ready_connector_state_count += 1
 
@@ -941,9 +1028,12 @@ class AsyncCustomSAC(CustomSAC):
             with metrics_logger.log_time((TIMERS, ENV_RUNNER_SAMPLING_TIMER)):
                 episodes = env_runner.sample()
                 env_runner_metrics = env_runner.get_metrics()
-                env_step_count = self._count_episode_env_steps(episodes)
-                total_new_env_steps += env_step_count
-                ready_episode_batches.append(episodes)
+                if replay_buffer_actor is not None:
+                    replay_add_refs.append(replay_buffer_actor.add.remote(episodes))
+                else:
+                    env_step_count = self._count_episode_env_steps(episodes)
+                    total_new_env_steps += env_step_count
+                    ready_episode_batches.append(episodes)
 
             metrics_logger.aggregate([env_runner_metrics], key=ENV_RUNNER_RESULTS)
 
@@ -964,6 +1054,10 @@ class AsyncCustomSAC(CustomSAC):
             with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
                 replay_buffer.add(episodes_to_add)
 
+        if replay_add_refs:
+            with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_ADD_DATA_TIMER)):
+                total_new_env_steps += sum(ray.get(replay_add_refs))
+
         metrics_logger.log_value(
             "async_sac_env_steps_added",
             total_new_env_steps,
@@ -983,25 +1077,11 @@ class AsyncCustomSAC(CustomSAC):
 
     def _sample_from_replay_buffer(self) -> list[Any]:
         """Sample a batch of episodes from the local replay buffer."""
-        runtime_config = cast(Any, self.config)
         metrics_logger = cast(Any, self.metrics)
         replay_buffer = cast(Any, self.local_replay_buffer)
 
         with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)):
-            episodes = replay_buffer.sample(
-                num_items=runtime_config.total_train_batch_size,
-                n_step=runtime_config.n_step,
-                batch_length_T=(
-                    self._module_is_stateful * runtime_config.model_config.get("max_seq_len", 0)
-                ),
-                lookback=int(self._module_is_stateful),
-                min_batch_length_T=(
-                    runtime_config.burn_in_len if hasattr(runtime_config, "burn_in_len") else 0
-                ),
-                gamma=runtime_config.gamma,
-                beta=runtime_config.replay_buffer_config.get("beta"),
-                sample_episodes=True,
-            )
+            episodes = replay_buffer.sample(**self._replay_sample_kwargs())
 
             replay_buffer_results = replay_buffer.get_metrics()
             metrics_logger.aggregate([replay_buffer_results], key=REPLAY_BUFFER_RESULTS)
@@ -1012,6 +1092,66 @@ class AsyncCustomSAC(CustomSAC):
             window=1,
         )
         return episodes
+
+    def _sample_from_replay_buffer_refs(self) -> list[Any]:
+        """Sample remote replay batches and return ObjectRefs for LearnerGroup.update."""
+        replay_buffer_actor = getattr(self, "_replay_buffer_actor", None)
+        if replay_buffer_actor is None:
+            raise RuntimeError("Replay buffer actor is not enabled.")
+
+        runtime_config = cast(Any, self.config)
+        metrics_logger = cast(Any, self.metrics)
+        learner_group = cast(Any, self.learner_group)
+        num_learners = max(len(learner_group), 1)
+        num_items = (
+            runtime_config.train_batch_size_per_learner
+            if num_learners > 1
+            else runtime_config.total_train_batch_size
+        )
+
+        with metrics_logger.log_time((TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)):
+            sample_result_refs = [
+                replay_buffer_actor.sample_episodes_ref.remote(
+                    **self._replay_sample_kwargs(num_items=num_items)
+                )
+                for _ in range(num_learners)
+            ]
+            sample_results = ray.get(sample_result_refs)
+
+            episode_refs = []
+            replay_buffer_results = []
+            num_episodes = 0
+            for episodes_ref, sampled_episodes, replay_metrics in sample_results:
+                episode_refs.append(episodes_ref)
+                num_episodes += sampled_episodes
+                replay_buffer_results.append(replay_metrics)
+
+            if replay_buffer_results:
+                metrics_logger.aggregate(replay_buffer_results, key=REPLAY_BUFFER_RESULTS)
+
+        metrics_logger.log_value(
+            "async_sac_replay_sampled_episodes",
+            num_episodes,
+            window=1,
+        )
+        return episode_refs
+
+    def _replay_sample_kwargs(self, *, num_items: int | None = None) -> dict[str, Any]:
+        runtime_config = cast(Any, self.config)
+        return {
+            "num_items": num_items or runtime_config.total_train_batch_size,
+            "n_step": runtime_config.n_step,
+            "batch_length_T": (
+                self._module_is_stateful * runtime_config.model_config.get("max_seq_len", 0)
+            ),
+            "lookback": int(self._module_is_stateful),
+            "min_batch_length_T": (
+                runtime_config.burn_in_len if hasattr(runtime_config, "burn_in_len") else 0
+            ),
+            "gamma": runtime_config.gamma,
+            "beta": runtime_config.replay_buffer_config.get("beta"),
+            "sample_episodes": True,
+        }
 
     def _process_learner_results(self, learner_results: list[Any]) -> None:
         """Handle learner update results: aggregate metrics and sync weights.
@@ -1146,14 +1286,7 @@ class AsyncCustomSAC(CustomSAC):
         SingleAgentEpisode / MultiAgentEpisode expose ``env_steps()`` as a method,
         not a ``length`` property. Falls back to ``len(ep)`` for generic sequences.
         """
-        total = 0
-        for ep in episodes:
-            if hasattr(ep, "env_steps"):
-                steps = ep.env_steps
-                total += steps() if callable(steps) else steps
-            else:
-                total += len(ep)
-        return total
+        return _count_episode_env_steps(episodes)
 
     def _current_sampled_timesteps(self) -> int:
         """Return the total env or agent steps sampled so far."""

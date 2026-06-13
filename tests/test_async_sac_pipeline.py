@@ -70,6 +70,30 @@ class _SamplingReplayBuffer:
         return self.metrics
 
 
+class _RemoteMethod:
+    def __init__(self, result_fn):
+        self.result_fn = result_fn
+        self.calls = []
+
+    def remote(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.result_fn(*args, **kwargs)
+
+
+class _ReplayBufferActor:
+    def __init__(self, *, sample_results=None, add_results=None):
+        self.sample_results = list(sample_results or [])
+        self.add_results = list(add_results or [])
+        self.sample_episodes_ref = _RemoteMethod(self._sample_episodes_ref)
+        self.add = _RemoteMethod(self._add)
+
+    def _sample_episodes_ref(self, **_kwargs):
+        return self.sample_results.pop(0)
+
+    def _add(self, _episodes):
+        return self.add_results.pop(0)
+
+
 class _WorkerManager:
     def __init__(self, outstanding=0, ready_results=None):
         self.outstanding = outstanding
@@ -116,13 +140,18 @@ class _LearnerGroup:
         update_results=None,
         ready_results=None,
         state=None,
+        num_learners=1,
     ):
         self._worker_manager = worker_manager or _WorkerManager()
         self.update_results = update_results if update_results is not None else []
         self.ready_results = ready_results if ready_results is not None else []
         self.state = state if state is not None else {}
+        self.num_learners = num_learners
         self.update_calls = []
         self.get_state_calls = []
+
+    def __len__(self):
+        return self.num_learners
 
     def update(self, **kwargs):
         self.update_calls.append(kwargs)
@@ -316,6 +345,81 @@ def test_sample_from_replay_buffer_forwards_beta_from_replay_config():
     assert algo.metrics.latest("async_sac_replay_sampled_episodes") == 1
 
 
+def test_sample_from_remote_replay_buffer_returns_episode_refs(monkeypatch):
+    from ray.rllib.utils.metrics import REPLAY_BUFFER_RESULTS, REPLAY_BUFFER_SAMPLE_TIMER, TIMERS
+
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    replay_actor = _ReplayBufferActor(
+        sample_results=[
+            ("episodes-ref-1", 3, {"buffer_size": 100}),
+            ("episodes-ref-2", 4, {"buffer_size": 200}),
+        ],
+    )
+    algo = _make_algo()
+    algo.config = SimpleNamespace(
+        total_train_batch_size=256,
+        train_batch_size_per_learner=128,
+        n_step=3,
+        model_config={"max_seq_len": 20},
+        burn_in_len=5,
+        gamma=0.95,
+        replay_buffer_config={"beta": 0.4},
+    )
+    algo.metrics = _Metrics()
+    algo.learner_group = _LearnerGroup(num_learners=2)
+    algo._module_is_stateful = True
+    algo._replay_buffer_actor = replay_actor
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    episode_refs = AsyncCustomSAC._sample_from_replay_buffer_refs(algo)
+
+    assert episode_refs == ["episodes-ref-1", "episodes-ref-2"]
+    assert [call[1]["num_items"] for call in replay_actor.sample_episodes_ref.calls] == [
+        128,
+        128,
+    ]
+    assert algo.metrics.time_keys == [(TIMERS, REPLAY_BUFFER_SAMPLE_TIMER)]
+    assert algo.metrics.aggregates == [
+        ([{"buffer_size": 100}, {"buffer_size": 200}], REPLAY_BUFFER_RESULTS)
+    ]
+    assert algo.metrics.latest("async_sac_replay_sampled_episodes") == 7
+
+
+def test_async_fetch_ready_samples_adds_to_remote_replay_actor(monkeypatch):
+    from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
+
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    connector_state = {"connector": "state-1"}
+    env_metrics = {"episode_return_mean": 1.0}
+    env_group = _EnvRunnerGroup(
+        ready_results=[("actor-1", ("episodes-ref", connector_state, env_metrics))],
+        worker_manager=_WorkerManager(outstanding=1),
+    )
+    replay_actor = _ReplayBufferActor(add_results=[7])
+    replay_buffer = _ReplayBuffer()
+    algo = _make_algo()
+    algo.env_runner_group = env_group
+    algo.local_replay_buffer = replay_buffer
+    algo._replay_buffer_actor = replay_actor
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    new_steps = AsyncCustomSAC._fetch_ready_samples_and_reissue(algo)
+
+    assert new_steps == 7
+    assert replay_actor.add.calls == [(("episodes-ref",), {})]
+    assert replay_buffer.added == []
+    assert algo._latest_connector_states_by_actor == {"actor-1": connector_state}
+    assert algo.metrics.aggregates == [([env_metrics], ENV_RUNNER_RESULTS)]
+    assert algo.metrics.latest("async_sac_env_ready_results") == 1
+    assert algo.metrics.latest("async_sac_env_steps_added") == 7
+
+
 def test_async_env_sync_learner_uses_sync_update_when_credit_available():
     from ray.rllib.utils.metrics import LEARNER_UPDATE_TIMER, TIMERS
 
@@ -341,6 +445,46 @@ def test_async_env_sync_learner_uses_sync_update_when_credit_available():
     assert algo.metrics.time_keys == [(TIMERS, LEARNER_UPDATE_TIMER)]
     assert algo.metrics.latest("async_sac_sync_learner_updates") == 1
     assert algo.metrics.latest("async_sac_train_credit_spent") == 1.0
+
+
+def test_async_env_sync_remote_learner_uses_episode_refs_when_replay_actor_enabled(
+    monkeypatch,
+):
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    replay_actor = _ReplayBufferActor(
+        sample_results=[("episodes-ref", 1, {"buffer_size": 100})],
+    )
+    learner_group = _LearnerGroup(update_results=[{"learner_stats": {"loss": 1.0}}])
+    processed = []
+    algo = _make_algo()
+    algo.config = SimpleNamespace(
+        num_learners=1,
+        max_requests_in_flight_per_learner=1,
+        async_max_sync_learner_updates_per_step=None,
+        total_train_batch_size=256,
+        train_batch_size_per_learner=256,
+        n_step=1,
+        model_config={"max_seq_len": 20},
+        gamma=0.99,
+        replay_buffer_config={"beta": None},
+    )
+    algo._use_async_learner_training = False
+    algo._train_credit = 1.0
+    algo.learner_group = learner_group
+    algo._process_learner_results = processed.append
+    algo._module_is_stateful = False
+    algo._replay_buffer_actor = replay_actor
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    AsyncCustomSAC._maybe_run_sync_learner_update(algo)
+
+    assert learner_group.update_calls[0]["episodes_refs"] == ["episodes-ref"]
+    assert "episodes" not in learner_group.update_calls[0]
+    assert learner_group.update_calls[0]["async_update"] is False
+    assert processed == [[{"learner_stats": {"loss": 1.0}}]]
 
 
 def test_sync_learner_drains_multiple_train_credits_and_processes_once():
@@ -415,6 +559,47 @@ def test_async_env_async_learner_issues_update_when_inflight_has_capacity():
     assert algo.metrics.latest("async_sac_learner_blocked_by_inflight") == 0
     assert algo.metrics.latest("async_sac_async_learner_updates_issued") == 1
     assert algo.metrics.latest("async_sac_learner_inflight_after_issue") == 1
+
+
+def test_async_env_async_learner_uses_episode_refs_when_replay_actor_enabled(
+    monkeypatch,
+):
+    from rlframework.algorithms import async_sac
+    from rlframework.algorithms.async_sac import AsyncCustomSAC
+
+    replay_actor = _ReplayBufferActor(
+        sample_results=[("episodes-ref", 1, {"buffer_size": 100})],
+    )
+    learner_group = _LearnerGroup(
+        worker_manager=_WorkerManager(outstanding=0),
+        update_results=[],
+    )
+    processed = []
+    algo = _make_algo()
+    algo.config = SimpleNamespace(
+        num_learners=1,
+        max_requests_in_flight_per_learner=1,
+        total_train_batch_size=256,
+        train_batch_size_per_learner=256,
+        n_step=1,
+        model_config={"max_seq_len": 20},
+        gamma=0.99,
+        replay_buffer_config={"beta": None},
+    )
+    algo._train_credit = 1.0
+    algo.learner_group = learner_group
+    algo._process_learner_results = processed.append
+    algo._module_is_stateful = False
+    algo._replay_buffer_actor = replay_actor
+
+    monkeypatch.setattr(async_sac.ray, "get", lambda ref: ref)
+
+    AsyncCustomSAC._maybe_issue_async_learner_update(algo)
+
+    assert learner_group.update_calls[0]["episodes_refs"] == ["episodes-ref"]
+    assert "episodes" not in learner_group.update_calls[0]
+    assert learner_group.update_calls[0]["async_update"] is True
+    assert processed == [[]]
 
 
 def test_async_learner_issues_until_inflight_capacity_is_full():
