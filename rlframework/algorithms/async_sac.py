@@ -114,7 +114,10 @@ from rlframework.algorithms.sac import (
     _resolve_replay_buffer_type,
 )
 from rlframework.utils.exceptions import ValidationError
-from rlframework.utils.replay_buffers import BatchEvictEpisodeReplayBuffer
+from rlframework.utils.replay_buffers import (
+    BatchEvictEpisodeReplayBuffer,
+    FastSampleEpisodeReplayBuffer,
+)
 
 _ASYNC_SAMPLE_TAG = "async_sac_sample"
 AsyncPipelineMode = Literal["auto", "sync", "async"]
@@ -123,12 +126,15 @@ logger = logging.getLogger(__name__)
 _SUPPORTED_ASYNC_REPLAY_BUFFER_TYPES = (
     EpisodeReplayBuffer,
     BatchEvictEpisodeReplayBuffer,
+    FastSampleEpisodeReplayBuffer,
 )
 _SUPPORTED_ASYNC_REPLAY_BUFFER_NAMES = {
     "EpisodeReplayBuffer",
     f"{EpisodeReplayBuffer.__module__}.{EpisodeReplayBuffer.__name__}",
     "BatchEvictEpisodeReplayBuffer",
     f"{BatchEvictEpisodeReplayBuffer.__module__}.{BatchEvictEpisodeReplayBuffer.__name__}",
+    "FastSampleEpisodeReplayBuffer",
+    f"{FastSampleEpisodeReplayBuffer.__module__}.{FastSampleEpisodeReplayBuffer.__name__}",
 }
 
 
@@ -289,7 +295,8 @@ class AsyncCustomSACConfig(CustomSACConfig):
             raise ValueError(
                 "AsyncCustomSAC only supports non-prioritized episode replay buffers: "
                 "`EpisodeReplayBuffer` or "
-                "`rlframework.utils.replay_buffers.BatchEvictEpisodeReplayBuffer`. "
+                "`rlframework.utils.replay_buffers.BatchEvictEpisodeReplayBuffer` or "
+                "`rlframework.utils.replay_buffers.FastSampleEpisodeReplayBuffer`. "
                 f"Got `replay_buffer_config['type']="
                 f"{_replay_buffer_type_label(buffer_type)}`. "
                 "Set `.training(replay_buffer_config={...})` explicitly. "

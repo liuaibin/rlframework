@@ -156,13 +156,18 @@ class TestAlgorithmConfigs:
         from ray.rllib.utils.replay_buffers.episode_replay_buffer import EpisodeReplayBuffer
 
         from rlframework.algorithms.async_sac import AsyncCustomSACConfig
-        from rlframework.utils.replay_buffers import BatchEvictEpisodeReplayBuffer
+        from rlframework.utils.replay_buffers import (
+            BatchEvictEpisodeReplayBuffer,
+            FastSampleEpisodeReplayBuffer,
+        )
 
         for buffer_type in (
             "EpisodeReplayBuffer",
             EpisodeReplayBuffer,
             BatchEvictEpisodeReplayBuffer,
             "rlframework.utils.replay_buffers.BatchEvictEpisodeReplayBuffer",
+            FastSampleEpisodeReplayBuffer,
+            "rlframework.utils.replay_buffers.FastSampleEpisodeReplayBuffer",
         ):
             cfg = (
                 AsyncCustomSACConfig()

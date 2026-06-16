@@ -276,6 +276,7 @@ class TestReplayBuffers:
         length: int,
         *,
         terminated: bool = True,
+        truncated: bool = False,
     ):
         from ray.rllib.env.single_agent_episode import SingleAgentEpisode
 
@@ -285,6 +286,7 @@ class TestReplayBuffers:
             actions=list(range(start, start + length)),
             rewards=[1.0] * length,
             terminated=terminated,
+            truncated=truncated,
             t_started=start,
             len_lookback_buffer=0,
         )
@@ -294,9 +296,11 @@ class TestReplayBuffers:
         from rlframework.utils import replay_buffers
 
         assert "BatchEvictEpisodeReplayBuffer" in replay_buffers.__all__
+        assert "FastSampleEpisodeReplayBuffer" in replay_buffers.__all__
         assert "PrioritizedSumTreeBuffer" in replay_buffers.__all__
         assert "ReservoirReplayBuffer" not in replay_buffers.__all__
         assert hasattr(utils, "BatchEvictEpisodeReplayBuffer")
+        assert hasattr(utils, "FastSampleEpisodeReplayBuffer")
         assert not hasattr(replay_buffers, "ReservoirReplayBuffer")
         assert not hasattr(utils, "ReservoirReplayBuffer")
 
@@ -347,6 +351,131 @@ class TestReplayBuffers:
         assert buffer.episode_id_to_index == {"B": 1, "C": 2}
         assert buffer._indices == [(1, 0), (1, 1), (2, 0), (2, 1)]
         assert buffer.get_num_timesteps() == 4
+
+    def test_fast_sample_matches_batch_evict_transition_sampling(self):
+        import numpy as np
+
+        from rlframework.utils.replay_buffers import (
+            BatchEvictEpisodeReplayBuffer,
+            FastSampleEpisodeReplayBuffer,
+        )
+
+        base_buffer = BatchEvictEpisodeReplayBuffer(capacity=10)
+        fast_buffer = FastSampleEpisodeReplayBuffer(capacity=10)
+        episodes = [
+            self._make_episode("A", 0, 3),
+            self._make_episode("B", 10, 2, terminated=False, truncated=True),
+        ]
+
+        base_buffer.add(episodes)
+        fast_buffer.add(episodes)
+        base_buffer.rng = np.random.default_rng(123)
+        fast_buffer.rng = np.random.default_rng(123)
+
+        base_sample = base_buffer.sample(
+            sample_episodes=True,
+            batch_size_B=8,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+        fast_sample = fast_buffer.sample(
+            sample_episodes=True,
+            batch_size_B=8,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+
+        assert len(fast_sample) == len(base_sample)
+        for fast_episode, base_episode in zip(fast_sample, base_sample, strict=True):
+            assert fast_episode.id_ == base_episode.id_
+            assert fast_episode.t_started == base_episode.t_started
+            assert fast_episode.is_terminated == base_episode.is_terminated
+            assert fast_episode.is_truncated == base_episode.is_truncated
+            assert fast_episode.get_observations() == base_episode.get_observations()
+            assert fast_episode.get_actions() == base_episode.get_actions()
+            assert fast_episode.get_rewards() == base_episode.get_rewards()
+            assert fast_episode.get_infos() == base_episode.get_infos()
+            assert fast_episode.get_extra_model_outputs(
+                "n_step"
+            ) == base_episode.get_extra_model_outputs("n_step")
+            assert fast_episode.get_extra_model_outputs(
+                "weights"
+            ) == base_episode.get_extra_model_outputs("weights")
+        assert fast_buffer.sampled_timesteps == 8
+
+    def test_fast_sample_marks_done_only_at_episode_end(self):
+        from rlframework.utils.replay_buffers import FastSampleEpisodeReplayBuffer
+
+        class FixedRng:
+            def __init__(self, values):
+                self.values = iter(values)
+
+            def integers(self, high):
+                return next(self.values)
+
+        buffer = FastSampleEpisodeReplayBuffer(capacity=6)
+        buffer.add(self._make_episode("A", 0, 3))
+        buffer.rng = FixedRng([0, 2])
+
+        sample = buffer.sample(
+            sample_episodes=True,
+            batch_size_B=2,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+
+        assert sample[0].t_started == 0
+        assert not sample[0].is_terminated
+        assert not sample[0].is_truncated
+        assert sample[1].t_started == 2
+        assert sample[1].is_terminated
+        assert not sample[1].is_truncated
+
+    def test_fast_sample_falls_back_for_unsupported_modes(self, monkeypatch):
+        from rlframework.utils.replay_buffers import (
+            BatchEvictEpisodeReplayBuffer,
+            FastSampleEpisodeReplayBuffer,
+        )
+
+        def fake_parent_sample(self, *args, **kwargs):
+            return ["fallback"]
+
+        monkeypatch.setattr(
+            BatchEvictEpisodeReplayBuffer,
+            "_sample_episodes",
+            fake_parent_sample,
+            raising=False,
+        )
+
+        fallback_cases = [
+            {"batch_length_T": 2, "n_step": 1, "lookback": 0},
+            {"batch_length_T": None, "n_step": 2, "lookback": 0},
+            {"batch_length_T": None, "n_step": (1, 3), "lookback": 0},
+            {"batch_length_T": None, "n_step": 1, "lookback": 1},
+            {
+                "batch_length_T": None,
+                "n_step": 1,
+                "lookback": 0,
+                "include_extra_model_outputs": True,
+            },
+            {"batch_length_T": None, "n_step": 1, "lookback": 0, "to_numpy": True},
+            {
+                "batch_length_T": None,
+                "n_step": 1,
+                "lookback": 0,
+                "min_batch_length_T": 1,
+            },
+        ]
+
+        for params in fallback_cases:
+            buffer = FastSampleEpisodeReplayBuffer(capacity=6)
+            assert buffer._sample_episodes(
+                batch_size_B=1,
+                **params,
+            ) == ["fallback"]
 
 
 # ---------------------------------------------------------------------------

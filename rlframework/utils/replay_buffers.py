@@ -26,10 +26,13 @@ Or use the string path for YAML configs::
 """
 
 import copy
+import hashlib
 from typing import Any, Union, cast
 
+import numpy as np
 from ray.rllib.core import DEFAULT_AGENT_ID, DEFAULT_MODULE_ID
 from ray.rllib.env.single_agent_episode import SingleAgentEpisode
+from ray.rllib.env.utils.infinite_lookback_buffer import InfiniteLookbackBuffer
 from ray.rllib.execution.segment_tree import SumSegmentTree as SumTree
 from ray.rllib.utils import force_list
 from ray.rllib.utils.annotations import override
@@ -156,6 +159,204 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
             ]
 
 
+class FastSampleEpisodeReplayBuffer(BatchEvictEpisodeReplayBuffer):
+    """Batch-evict buffer with a fast path for 1-step transition sampling.
+
+    The fast path avoids constructing an intermediate episode slice for the common
+    stateless SAC replay case: transition sampling with ``n_step=1`` and no
+    lookback. More complex sampling modes fall back to RLlib's implementation.
+    """
+
+    @override(EpisodeReplayBuffer)
+    def _sample_episodes(
+        self,
+        num_items: int | None = None,
+        *,
+        batch_size_B: int | None = None,  # noqa: N803 - RLlib API name.
+        batch_length_T: int | None = None,  # noqa: N803 - RLlib API name.
+        n_step: int | tuple | None = None,
+        gamma: float = 0.99,
+        include_infos: bool = False,
+        include_extra_model_outputs: bool = False,
+        to_numpy: bool = False,
+        lookback: int = 1,
+        min_batch_length_T: int = 0,  # noqa: N803 - RLlib API name.
+        **kwargs: Any,
+    ) -> list[SingleAgentEpisode]:
+        """Sample episodes, using a direct transition path when it is safe."""
+        if self._can_use_fast_transition_sample(
+            num_items=num_items,
+            batch_size=batch_size_B,
+            batch_length=batch_length_T,
+            n_step=n_step,
+            include_extra_model_outputs=include_extra_model_outputs,
+            to_numpy=to_numpy,
+            lookback=lookback,
+            min_batch_length=min_batch_length_T,
+        ):
+            return self._sample_episodes_fast_transition(
+                num_items=num_items,
+                batch_size=batch_size_B,
+                n_step=cast(int, n_step),
+                lookback=lookback,
+            )
+
+        return super()._sample_episodes(
+            num_items=num_items,
+            batch_size_B=batch_size_B,
+            batch_length_T=batch_length_T,
+            n_step=n_step,
+            gamma=gamma,
+            include_infos=include_infos,
+            include_extra_model_outputs=include_extra_model_outputs,
+            to_numpy=to_numpy,
+            lookback=lookback,
+            min_batch_length_T=min_batch_length_T,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _can_use_fast_transition_sample(
+        *,
+        num_items: int | None,
+        batch_size: int | None,
+        batch_length: int | None,
+        n_step: int | tuple | None,
+        include_extra_model_outputs: bool,
+        to_numpy: bool,
+        lookback: int,
+        min_batch_length: int,
+    ) -> bool:
+        """Return whether this sample request matches the safe fast path."""
+        if num_items is not None and batch_size is not None:
+            return False
+        return (
+            not batch_length
+            and not isinstance(n_step, tuple)
+            and n_step == 1
+            and lookback == 0
+            and min_batch_length == 0
+            and not include_extra_model_outputs
+            and not to_numpy
+        )
+
+    def _sample_episodes_fast_transition(
+        self,
+        num_items: int | None,
+        *,
+        batch_size: int | None,
+        n_step: int,
+        lookback: int,
+    ) -> list[SingleAgentEpisode]:
+        """Sample 1-step transitions without creating intermediate episode slices."""
+        if num_items is not None:
+            assert batch_size is None, (
+                "Cannot call `sample()` with both `num_items` and `batch_size_B` "
+                "provided! Use either one."
+            )
+            batch_size = num_items
+
+        batch_size = batch_size or self.batch_size_B
+        self._last_sampled_indices = []
+
+        sampled_episodes = []
+        sampled_env_step_idxs = set()
+        sampled_episode_idxs = set()
+
+        for _ in range(batch_size):
+            episode_abs_idx, episode_ts = self._indices[self.rng.integers(len(self._indices))]
+            episode_idx = episode_abs_idx - self._num_episodes_evicted
+            episode = self.episodes[episode_idx]
+            next_ts = episode_ts + 1
+            done_at_end = next_ts == len(episode)
+
+            sampled_episode = SingleAgentEpisode(
+                id_=episode.id_,
+                agent_id=episode.agent_id,
+                module_id=episode.module_id,
+                observation_space=episode.observation_space,
+                action_space=episode.action_space,
+                observations=[
+                    episode.get_observations(episode_ts),
+                    episode.get_observations(next_ts),
+                ],
+                actions=[episode.get_actions(episode_ts)],
+                rewards=[episode.get_rewards(episode_ts)],
+                infos=[
+                    episode.get_infos(episode_ts),
+                    episode.get_infos(next_ts),
+                ],
+                terminated=episode.is_terminated if done_at_end else False,
+                truncated=episode.is_truncated if done_at_end else False,
+                t_started=episode_ts,
+                len_lookback_buffer=0,
+            )
+            sampled_episode.extra_model_outputs["n_step"] = InfiniteLookbackBuffer(
+                np.full((len(sampled_episode) + lookback,), n_step),
+                lookback=lookback,
+            )
+            sampled_episode.extra_model_outputs["weights"] = InfiniteLookbackBuffer(
+                np.ones((len(sampled_episode) + lookback,)),
+                lookback=lookback,
+            )
+
+            sampled_env_step_idxs.add(
+                hashlib.sha256(f"{episode.id_}-{episode_ts}".encode()).hexdigest()
+            )
+            sampled_episode_idxs.add(episode_idx)
+            sampled_episodes.append(sampled_episode)
+
+        self.sampled_timesteps += batch_size
+        self._update_fast_sample_metrics(
+            batch_size=batch_size,
+            num_episodes_per_sample=len(sampled_episode_idxs),
+            num_env_steps_per_sample=len(sampled_env_step_idxs),
+            sampled_n_step=float(n_step),
+        )
+
+        return sampled_episodes
+
+    def _update_fast_sample_metrics(
+        self,
+        *,
+        batch_size: int,
+        num_episodes_per_sample: int,
+        num_env_steps_per_sample: int,
+        sampled_n_step: float,
+    ) -> None:
+        """Update sample metrics with the same single-agent defaults as RLlib."""
+        num_env_steps_sampled = batch_size
+        num_resamples = 0
+        agent_to_num_steps_sampled = {DEFAULT_AGENT_ID: num_env_steps_sampled}
+        agent_to_num_episodes_per_sample = {DEFAULT_AGENT_ID: num_episodes_per_sample}
+        agent_to_num_steps_per_sample = {DEFAULT_AGENT_ID: num_env_steps_per_sample}
+        agent_to_sampled_n_step = {DEFAULT_AGENT_ID: sampled_n_step}
+        agent_to_num_resamples = {DEFAULT_AGENT_ID: num_resamples}
+        module_to_num_steps_sampled = {DEFAULT_MODULE_ID: num_env_steps_sampled}
+        module_to_num_episodes_per_sample = {DEFAULT_MODULE_ID: num_episodes_per_sample}
+        module_to_num_steps_per_sample = {DEFAULT_MODULE_ID: num_env_steps_per_sample}
+        module_to_sampled_n_step = {DEFAULT_MODULE_ID: sampled_n_step}
+        module_to_num_resamples = {DEFAULT_MODULE_ID: num_resamples}
+
+        self._update_sample_metrics(
+            num_env_steps_sampled=num_env_steps_sampled,
+            num_episodes_per_sample=num_episodes_per_sample,
+            num_env_steps_per_sample=num_env_steps_per_sample,
+            sampled_n_step=sampled_n_step,
+            num_resamples=num_resamples,
+            agent_to_num_steps_sampled=agent_to_num_steps_sampled,
+            agent_to_num_episodes_per_sample=agent_to_num_episodes_per_sample,
+            agent_to_num_steps_per_sample=agent_to_num_steps_per_sample,
+            agent_to_sampled_n_step=agent_to_sampled_n_step,
+            agent_to_num_resamples=agent_to_num_resamples,
+            module_to_num_steps_sampled=module_to_num_steps_sampled,
+            module_to_num_episodes_per_sample=module_to_num_episodes_per_sample,
+            module_to_num_steps_per_sample=module_to_num_steps_per_sample,
+            module_to_sampled_n_step=module_to_sampled_n_step,
+            module_to_num_resamples=module_to_num_resamples,
+        )
+
+
 class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
     """Replay buffer with SumTree-based prioritized sampling.
 
@@ -213,6 +414,7 @@ class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
 
 __all__ = [
     "BatchEvictEpisodeReplayBuffer",
+    "FastSampleEpisodeReplayBuffer",
     "PrioritizedSumTreeBuffer",
     "SumTree",
 ]
