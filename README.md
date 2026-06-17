@@ -669,3 +669,9 @@ algo.restore_from_path(checkpoint_path)
 ## 支持
 
 如有问题，请提交 Issue 或联系开发团队。
+
+
+如果step时间很长，可以设置下gc的频率，强烈推荐
+import gc
+# 提高阈值，减少GC触发频率（适合内存充裕的场景）
+gc.set_threshold(7000, 20, 20),  解释下参数意思，
