@@ -159,6 +159,7 @@ class TestAlgorithmConfigs:
         from rlframework.utils.replay_buffers import (
             BatchEvictEpisodeReplayBuffer,
             FastSampleEpisodeReplayBuffer,
+            NumpyIndexedFastSampleEpisodeReplayBuffer,
         )
 
         for buffer_type in (
@@ -168,6 +169,8 @@ class TestAlgorithmConfigs:
             "rlframework.utils.replay_buffers.BatchEvictEpisodeReplayBuffer",
             FastSampleEpisodeReplayBuffer,
             "rlframework.utils.replay_buffers.FastSampleEpisodeReplayBuffer",
+            NumpyIndexedFastSampleEpisodeReplayBuffer,
+            "rlframework.utils.replay_buffers.NumpyIndexedFastSampleEpisodeReplayBuffer",
         ):
             cfg = (
                 AsyncCustomSACConfig()

@@ -297,10 +297,12 @@ class TestReplayBuffers:
 
         assert "BatchEvictEpisodeReplayBuffer" in replay_buffers.__all__
         assert "FastSampleEpisodeReplayBuffer" in replay_buffers.__all__
+        assert "NumpyIndexedFastSampleEpisodeReplayBuffer" in replay_buffers.__all__
         assert "PrioritizedSumTreeBuffer" in replay_buffers.__all__
         assert "ReservoirReplayBuffer" not in replay_buffers.__all__
         assert hasattr(utils, "BatchEvictEpisodeReplayBuffer")
         assert hasattr(utils, "FastSampleEpisodeReplayBuffer")
+        assert hasattr(utils, "NumpyIndexedFastSampleEpisodeReplayBuffer")
         assert not hasattr(replay_buffers, "ReservoirReplayBuffer")
         assert not hasattr(utils, "ReservoirReplayBuffer")
 
@@ -351,6 +353,23 @@ class TestReplayBuffers:
         assert buffer.episode_id_to_index == {"B": 1, "C": 2}
         assert buffer._indices == [(1, 0), (1, 1), (2, 0), (2, 1)]
         assert buffer.get_num_timesteps() == 4
+
+    def test_replay_buffer_can_skip_copying_owned_episodes(self):
+        from rlframework.utils.replay_buffers import NumpyIndexedFastSampleEpisodeReplayBuffer
+
+        copied_episode = self._make_episode("A", 0, 2)
+        copied_buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        copied_buffer.add(copied_episode)
+
+        owned_episode = self._make_episode("B", 0, 2)
+        owned_buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(
+            capacity=6,
+            copy_episodes_on_add=False,
+        )
+        owned_buffer.add(owned_episode)
+
+        assert copied_buffer.episodes[0] is not copied_episode
+        assert owned_buffer.episodes[0] is owned_episode
 
     def test_fast_sample_matches_batch_evict_transition_sampling(self):
         import numpy as np
@@ -476,6 +495,141 @@ class TestReplayBuffers:
                 batch_size_B=1,
                 **params,
             ) == ["fallback"]
+
+    def test_numpy_indexed_buffer_tracks_indices_and_eviction(self):
+        from rlframework.utils.replay_buffers import NumpyIndexedFastSampleEpisodeReplayBuffer
+
+        buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        buffer.add(self._make_episode("A", 0, 2, terminated=False))
+        buffer.add(self._make_episode("B", 0, 2))
+        buffer.add(self._make_episode("A", 2, 2))
+
+        assert buffer.get_num_timesteps() == 6
+        assert buffer._num_indices == 6
+        assert buffer._index_episode[: buffer._num_indices].tolist() == [0, 0, 1, 1, 0, 0]
+        assert buffer._index_timestep[: buffer._num_indices].tolist() == [0, 1, 0, 1, 2, 3]
+
+        buffer.add(self._make_episode("C", 0, 2))
+
+        assert "A" not in buffer.episode_id_to_index
+        assert buffer.episode_id_to_index == {"B": 1, "C": 2}
+        assert buffer.get_num_timesteps() == 4
+        assert buffer._index_episode[: buffer._num_indices].tolist() == [1, 1, 2, 2]
+        assert buffer._index_timestep[: buffer._num_indices].tolist() == [0, 1, 0, 1]
+        assert buffer._indices == []
+
+    def test_numpy_indexed_fast_sample_matches_fast_sample(self):
+        import numpy as np
+
+        from rlframework.utils.replay_buffers import (
+            FastSampleEpisodeReplayBuffer,
+            NumpyIndexedFastSampleEpisodeReplayBuffer,
+        )
+
+        fast_buffer = FastSampleEpisodeReplayBuffer(capacity=10)
+        numpy_buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=10)
+        episodes = [
+            self._make_episode("A", 0, 3),
+            self._make_episode("B", 10, 2, terminated=False, truncated=True),
+        ]
+
+        fast_buffer.add(episodes)
+        numpy_buffer.add(episodes)
+        fast_buffer.rng = np.random.default_rng(123)
+        numpy_buffer.rng = np.random.default_rng(123)
+
+        fast_sample = fast_buffer.sample(
+            sample_episodes=True,
+            batch_size_B=8,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+        numpy_sample = numpy_buffer.sample(
+            sample_episodes=True,
+            batch_size_B=8,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+
+        assert numpy_buffer._indices == []
+        assert len(numpy_sample) == len(fast_sample)
+        for numpy_episode, fast_episode in zip(numpy_sample, fast_sample, strict=True):
+            assert numpy_episode.id_ == fast_episode.id_
+            assert numpy_episode.t_started == fast_episode.t_started
+            assert numpy_episode.is_terminated == fast_episode.is_terminated
+            assert numpy_episode.is_truncated == fast_episode.is_truncated
+            assert numpy_episode.get_observations() == fast_episode.get_observations()
+            assert numpy_episode.get_actions() == fast_episode.get_actions()
+            assert numpy_episode.get_rewards() == fast_episode.get_rewards()
+            assert numpy_episode.get_infos() == fast_episode.get_infos()
+            assert numpy_episode.get_extra_model_outputs(
+                "n_step"
+            ) == fast_episode.get_extra_model_outputs("n_step")
+            assert numpy_episode.get_extra_model_outputs(
+                "weights"
+            ) == fast_episode.get_extra_model_outputs("weights")
+
+    def test_numpy_indexed_buffer_materializes_indices_for_fallback(self, monkeypatch):
+        from rlframework.utils.replay_buffers import (
+            BatchEvictEpisodeReplayBuffer,
+            NumpyIndexedFastSampleEpisodeReplayBuffer,
+        )
+
+        observed_indices = []
+
+        def fake_parent_sample(self, *args, **kwargs):
+            observed_indices.extend(self._indices)
+            return ["fallback"]
+
+        monkeypatch.setattr(
+            BatchEvictEpisodeReplayBuffer,
+            "_sample_episodes",
+            fake_parent_sample,
+            raising=False,
+        )
+
+        buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        buffer.add(self._make_episode("A", 0, 2))
+
+        assert buffer._sample_episodes(
+            batch_size_B=1,
+            batch_length_T=None,
+            n_step=2,
+            lookback=0,
+        ) == ["fallback"]
+        assert observed_indices == [(0, 0), (0, 1)]
+
+    def test_numpy_indexed_buffer_state_restore_and_legacy_indices(self):
+        import numpy as np
+
+        from rlframework.utils.replay_buffers import (
+            BatchEvictEpisodeReplayBuffer,
+            NumpyIndexedFastSampleEpisodeReplayBuffer,
+        )
+
+        buffer = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        buffer.add([self._make_episode("A", 0, 2), self._make_episode("B", 10, 2)])
+        state = buffer.get_state()
+
+        restored = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        restored.set_state(state)
+        restored.rng = np.random.default_rng(123)
+
+        assert restored.get_num_timesteps() == buffer.get_num_timesteps()
+        assert restored._index_episode[: restored._num_indices].tolist() == [0, 0, 1, 1]
+        assert restored._index_timestep[: restored._num_indices].tolist() == [0, 1, 0, 1]
+        assert len(restored.sample(sample_episodes=True, batch_size_B=2, n_step=1, lookback=0)) == 2
+
+        legacy_buffer = BatchEvictEpisodeReplayBuffer(capacity=6)
+        legacy_buffer.add(self._make_episode("C", 0, 2))
+        migrated = NumpyIndexedFastSampleEpisodeReplayBuffer(capacity=6)
+        migrated.set_state(legacy_buffer.get_state())
+
+        assert migrated.get_num_timesteps() == 2
+        assert migrated._index_episode[: migrated._num_indices].tolist() == [0, 0]
+        assert migrated._index_timestep[: migrated._num_indices].tolist() == [0, 1]
 
 
 # ---------------------------------------------------------------------------

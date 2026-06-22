@@ -53,6 +53,15 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
     evicted episode indices and filters `_indices` once at the end of `add()`.
     """
 
+    def __init__(
+        self,
+        *args: Any,
+        copy_episodes_on_add: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.copy_episodes_on_add = copy_episodes_on_add
+
     @override(ReplayBufferInterface)
     def add(
         self,
@@ -79,7 +88,7 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
 
         for eps in episode_list:
             # Preserve RLlib's default ownership semantics.
-            eps = copy.deepcopy(eps)
+            eps = self._copy_episode_for_add(eps)
 
             eps_len = len(eps)
             self._num_timesteps += eps_len
@@ -157,6 +166,10 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
                 for idx_tuple in self._indices
                 if idx_tuple[0] not in evicted_episode_indices
             ]
+
+    def _copy_episode_for_add(self, eps: SingleAgentEpisode) -> SingleAgentEpisode:
+        """Return the episode object that should be owned by the replay buffer."""
+        return copy.deepcopy(eps) if self.copy_episodes_on_add else eps
 
 
 class FastSampleEpisodeReplayBuffer(BatchEvictEpisodeReplayBuffer):
@@ -357,6 +370,403 @@ class FastSampleEpisodeReplayBuffer(BatchEvictEpisodeReplayBuffer):
         )
 
 
+class NumpyIndexedFastSampleEpisodeReplayBuffer(FastSampleEpisodeReplayBuffer):
+    """Fast replay buffer that stores timestep sample indices in NumPy arrays.
+
+    This keeps the ``FastSampleEpisodeReplayBuffer`` transition fast path, but
+    replaces the hot-path Python list-of-tuples ``_indices`` with two dense NumPy
+    columns: episode absolute index and timestep within that episode. Unsupported
+    sample modes still materialize ``_indices`` lazily before falling back to RLlib.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        index_capacity: int | None = None,
+        expand_index_capacity: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+
+        self._index_capacity = int(self.capacity if index_capacity is None else index_capacity)
+        if self._index_capacity < 0:
+            raise ValueError("index_capacity must be non-negative")
+
+        self._expand_index_capacity = expand_index_capacity
+        self._index_episode = np.empty(self._index_capacity, dtype=np.int64)
+        self._index_timestep = np.empty(self._index_capacity, dtype=np.int32)
+        self._num_indices = 0
+        # _indices is only a compatibility cache for fallback parent methods.
+        self._indices = []
+
+    @override(ReplayBufferInterface)
+    def add(
+        self,
+        episodes: Union[list["SingleAgentEpisode"], "SingleAgentEpisode"],
+    ) -> None:
+        """Add episodes while maintaining NumPy-backed timestep indices."""
+        episode_list = cast(list[SingleAgentEpisode], force_list(episodes))
+        self._indices = []
+
+        num_env_steps_added = 0
+        agent_to_num_steps_added = {DEFAULT_AGENT_ID: 0}
+        module_to_num_steps_added = {DEFAULT_MODULE_ID: 0}
+        num_episodes_added = 0
+        agent_to_num_episodes_added = {DEFAULT_AGENT_ID: 0}
+        module_to_num_episodes_added = {DEFAULT_MODULE_ID: 0}
+        num_episodes_evicted = 0
+        agent_to_num_episodes_evicted = {DEFAULT_AGENT_ID: 0}
+        module_to_num_episodes_evicted = {DEFAULT_MODULE_ID: 0}
+        num_env_steps_evicted = 0
+        agent_to_num_steps_evicted = {DEFAULT_AGENT_ID: 0}
+        module_to_num_steps_evicted = {DEFAULT_MODULE_ID: 0}
+
+        evicted_episode_indices: set[int] = set()
+
+        for eps in episode_list:
+            # Preserve RLlib's default ownership semantics.
+            eps = self._copy_episode_for_add(eps)
+
+            eps_len = len(eps)
+            self._num_timesteps += eps_len
+            self._num_timesteps_added += eps_len
+            num_env_steps_added += eps_len
+            agent_to_num_steps_added[DEFAULT_AGENT_ID] += eps_len
+            module_to_num_steps_added[DEFAULT_MODULE_ID] += eps_len
+
+            if eps.id_ in self.episode_id_to_index:
+                eps_idx = self.episode_id_to_index[eps.id_]
+                existing_eps = self.episodes[eps_idx - self._num_episodes_evicted]
+                old_len = len(existing_eps)
+                self._append_indices_np(eps_idx, old_len, eps_len)
+                existing_eps.concat_episode(eps)
+            else:
+                num_episodes_added += 1
+                agent_to_num_episodes_added[DEFAULT_AGENT_ID] += 1
+                module_to_num_episodes_added[DEFAULT_MODULE_ID] += 1
+                self.episodes.append(eps)
+                eps_idx = len(self.episodes) - 1 + self._num_episodes_evicted
+                self.episode_id_to_index[eps.id_] = eps_idx
+                self._append_indices_np(eps_idx, 0, eps_len)
+
+            while self._num_timesteps > self.capacity and self.get_num_episodes() > 1:
+                evicted_eps = self.episodes.popleft()
+                evicted_eps_len = len(evicted_eps)
+
+                num_episodes_evicted += 1
+                num_env_steps_evicted += evicted_eps_len
+                agent_to_num_episodes_evicted[DEFAULT_AGENT_ID] += 1
+                module_to_num_episodes_evicted[DEFAULT_MODULE_ID] += 1
+                agent_to_num_steps_evicted[DEFAULT_AGENT_ID] += evicted_eps.agent_steps()
+                module_to_num_steps_evicted[DEFAULT_MODULE_ID] += evicted_eps.agent_steps()
+
+                self._num_timesteps -= evicted_eps_len
+
+                evicted_idx = self.episode_id_to_index[evicted_eps.id_]
+                del self.episode_id_to_index[evicted_eps.id_]
+                evicted_episode_indices.add(evicted_idx)
+
+                self._num_episodes_evicted += 1
+
+        if evicted_episode_indices:
+            self._rebuild_indices_batch_np(evicted_episode_indices)
+
+        self._update_add_metrics(
+            num_episodes_added=num_episodes_added,
+            num_env_steps_added=num_env_steps_added,
+            num_episodes_evicted=num_episodes_evicted,
+            num_env_steps_evicted=num_env_steps_evicted,
+            agent_to_num_episodes_added=agent_to_num_episodes_added,
+            agent_to_num_steps_added=agent_to_num_steps_added,
+            agent_to_num_episodes_evicted=agent_to_num_episodes_evicted,
+            agent_to_num_steps_evicted=agent_to_num_steps_evicted,
+            # Preserve RLlib's add() metrics behavior for drop-in parity.
+            module_to_num_episodes_added=module_to_num_steps_added,
+            module_to_num_steps_added=module_to_num_episodes_added,
+            module_to_num_episodes_evicted=module_to_num_episodes_evicted,
+            module_to_num_steps_evicted=module_to_num_steps_evicted,
+        )
+
+    @override(EpisodeReplayBuffer)
+    def _sample_batch(
+        self,
+        num_items: int | None = None,
+        *,
+        batch_size_B: int | None = None,  # noqa: N803 - RLlib API name.
+        batch_length_T: int | None = None,  # noqa: N803 - RLlib API name.
+    ) -> Any:
+        """Materialize Python indices for RLlib's non-episode batch fallback."""
+        self._materialize_indices_for_fallback()
+        try:
+            return super()._sample_batch(
+                num_items=num_items,
+                batch_size_B=batch_size_B,
+                batch_length_T=batch_length_T,
+            )
+        finally:
+            self._indices = []
+
+    @override(EpisodeReplayBuffer)
+    def _sample_episodes(
+        self,
+        num_items: int | None = None,
+        *,
+        batch_size_B: int | None = None,  # noqa: N803 - RLlib API name.
+        batch_length_T: int | None = None,  # noqa: N803 - RLlib API name.
+        n_step: int | tuple | None = None,
+        gamma: float = 0.99,
+        include_infos: bool = False,
+        include_extra_model_outputs: bool = False,
+        to_numpy: bool = False,
+        lookback: int = 1,
+        min_batch_length_T: int = 0,  # noqa: N803 - RLlib API name.
+        **kwargs: Any,
+    ) -> list[SingleAgentEpisode]:
+        """Use NumPy fast path when possible, materializing only for fallbacks."""
+        if self._can_use_fast_transition_sample(
+            num_items=num_items,
+            batch_size=batch_size_B,
+            batch_length=batch_length_T,
+            n_step=n_step,
+            include_extra_model_outputs=include_extra_model_outputs,
+            to_numpy=to_numpy,
+            lookback=lookback,
+            min_batch_length=min_batch_length_T,
+        ):
+            return self._sample_episodes_fast_transition(
+                num_items=num_items,
+                batch_size=batch_size_B,
+                n_step=cast(int, n_step),
+                lookback=lookback,
+            )
+
+        self._materialize_indices_for_fallback()
+        try:
+            return super()._sample_episodes(
+                num_items=num_items,
+                batch_size_B=batch_size_B,
+                batch_length_T=batch_length_T,
+                n_step=n_step,
+                gamma=gamma,
+                include_infos=include_infos,
+                include_extra_model_outputs=include_extra_model_outputs,
+                to_numpy=to_numpy,
+                lookback=lookback,
+                min_batch_length_T=min_batch_length_T,
+                **kwargs,
+            )
+        finally:
+            self._indices = []
+
+    def _sample_episodes_fast_transition(
+        self,
+        num_items: int | None,
+        *,
+        batch_size: int | None,
+        n_step: int,
+        lookback: int,
+    ) -> list[SingleAgentEpisode]:
+        """Sample 1-step transitions from NumPy-backed timestep indices."""
+        if num_items is not None:
+            assert batch_size is None, (
+                "Cannot call `sample()` with both `num_items` and `batch_size_B` "
+                "provided! Use either one."
+            )
+            batch_size = num_items
+
+        batch_size = batch_size or self.batch_size_B
+        self._last_sampled_indices = []
+
+        sampled_episodes = []
+        sampled_env_step_idxs = set()
+        sampled_episode_idxs = set()
+
+        for _ in range(batch_size):
+            slot = int(self.rng.integers(self._num_indices))
+            episode_abs_idx = int(self._index_episode[slot])
+            episode_ts = int(self._index_timestep[slot])
+            episode_idx = episode_abs_idx - self._num_episodes_evicted
+            episode = self.episodes[episode_idx]
+            next_ts = episode_ts + 1
+            done_at_end = next_ts == len(episode)
+
+            sampled_episode = SingleAgentEpisode(
+                id_=episode.id_,
+                agent_id=episode.agent_id,
+                module_id=episode.module_id,
+                observation_space=episode.observation_space,
+                action_space=episode.action_space,
+                observations=[
+                    episode.get_observations(episode_ts),
+                    episode.get_observations(next_ts),
+                ],
+                actions=[episode.get_actions(episode_ts)],
+                rewards=[episode.get_rewards(episode_ts)],
+                infos=[
+                    episode.get_infos(episode_ts),
+                    episode.get_infos(next_ts),
+                ],
+                terminated=episode.is_terminated if done_at_end else False,
+                truncated=episode.is_truncated if done_at_end else False,
+                t_started=episode_ts,
+                len_lookback_buffer=0,
+            )
+            sampled_episode.extra_model_outputs["n_step"] = InfiniteLookbackBuffer(
+                np.full((len(sampled_episode) + lookback,), n_step),
+                lookback=lookback,
+            )
+            sampled_episode.extra_model_outputs["weights"] = InfiniteLookbackBuffer(
+                np.ones((len(sampled_episode) + lookback,)),
+                lookback=lookback,
+            )
+
+            sampled_env_step_idxs.add(
+                hashlib.sha256(f"{episode.id_}-{episode_ts}".encode()).hexdigest()
+            )
+            sampled_episode_idxs.add(episode_idx)
+            sampled_episodes.append(sampled_episode)
+
+        self.sampled_timesteps += batch_size
+        self._update_fast_sample_metrics(
+            batch_size=batch_size,
+            num_episodes_per_sample=len(sampled_episode_idxs),
+            num_env_steps_per_sample=len(sampled_env_step_idxs),
+            sampled_n_step=float(n_step),
+        )
+
+        return sampled_episodes
+
+    def get_num_timesteps(self, module_id: Any | None = None) -> int:
+        """Returns number of individual timesteps stored in the buffer."""
+        return self._num_indices
+
+    @override(ReplayBufferInterface)
+    def get_state(self) -> dict[str, Any]:
+        """Gets a pickable state with NumPy-backed index columns."""
+        return {
+            "episodes": [eps.get_state() for eps in self.episodes],
+            "episode_id_to_index": list(self.episode_id_to_index.items()),
+            "_num_episodes_evicted": self._num_episodes_evicted,
+            "_num_timesteps": self._num_timesteps,
+            "_num_timesteps_added": self._num_timesteps_added,
+            "sampled_timesteps": self.sampled_timesteps,
+            "_index_episode": self._index_episode[: self._num_indices].copy(),
+            "_index_timestep": self._index_timestep[: self._num_indices].copy(),
+            "_num_indices": self._num_indices,
+            "_index_capacity": self._index_capacity,
+        }
+
+    @override(ReplayBufferInterface)
+    def set_state(self, state: dict[str, Any]) -> None:
+        """Restores NumPy-backed state, including migration from old ``_indices``."""
+        self._set_episodes(state)
+        self.episode_id_to_index = dict(state["episode_id_to_index"])
+        self._num_episodes_evicted = state["_num_episodes_evicted"]
+        self._num_timesteps = state["_num_timesteps"]
+        self._num_timesteps_added = state["_num_timesteps_added"]
+        self.sampled_timesteps = state["sampled_timesteps"]
+
+        if "_index_episode" in state:
+            saved_episode = np.asarray(state["_index_episode"], dtype=self._index_episode.dtype)
+            saved_timestep = np.asarray(state["_index_timestep"], dtype=self._index_timestep.dtype)
+            saved_num_indices = int(state.get("_num_indices", len(saved_episode)))
+            saved_capacity = int(state.get("_index_capacity", saved_num_indices))
+        else:
+            old_indices = state.get("_indices", [])
+            saved_num_indices = len(old_indices)
+            saved_capacity = saved_num_indices
+            if saved_num_indices:
+                old_index_array = np.asarray(old_indices)
+                saved_episode = old_index_array[:, 0].astype(self._index_episode.dtype)
+                saved_timestep = old_index_array[:, 1].astype(self._index_timestep.dtype)
+            else:
+                saved_episode = np.empty(0, dtype=self._index_episode.dtype)
+                saved_timestep = np.empty(0, dtype=self._index_timestep.dtype)
+
+        self._index_capacity = max(self._index_capacity, saved_capacity, saved_num_indices)
+        self._index_episode = np.empty(self._index_capacity, dtype=np.int64)
+        self._index_timestep = np.empty(self._index_capacity, dtype=np.int32)
+        if saved_num_indices:
+            self._index_episode[:saved_num_indices] = saved_episode[:saved_num_indices]
+            self._index_timestep[:saved_num_indices] = saved_timestep[:saved_num_indices]
+        self._num_indices = saved_num_indices
+        self._indices = []
+
+    def _append_indices_np(self, eps_idx: int, start_ts: int, length: int) -> None:
+        """Append timestep sample indices for one episode/chunk."""
+        if length <= 0:
+            return
+
+        end_ts = start_ts + length
+        if end_ts - 1 > np.iinfo(self._index_timestep.dtype).max:
+            raise OverflowError("timestep index exceeds int32 index storage")
+
+        end = self._num_indices + length
+        self._ensure_index_capacity(end)
+        write_slice = slice(self._num_indices, end)
+
+        self._index_episode[write_slice] = eps_idx
+        self._index_timestep[write_slice] = np.arange(
+            start_ts,
+            end_ts,
+            dtype=self._index_timestep.dtype,
+        )
+        self._num_indices = end
+
+    def _ensure_index_capacity(self, required: int) -> None:
+        """Grow NumPy index arrays when allowed and required."""
+        if required <= self._index_capacity:
+            return
+        if not self._expand_index_capacity:
+            raise BufferError(
+                f"Replay index capacity exceeded: need {required}, "
+                f"capacity={self._index_capacity}"
+            )
+
+        new_capacity = max(required, int(max(self._index_capacity, 1) * 1.5))
+        new_episode = np.empty(new_capacity, dtype=self._index_episode.dtype)
+        new_timestep = np.empty(new_capacity, dtype=self._index_timestep.dtype)
+        new_episode[: self._num_indices] = self._index_episode[: self._num_indices]
+        new_timestep[: self._num_indices] = self._index_timestep[: self._num_indices]
+
+        self._index_episode = new_episode
+        self._index_timestep = new_timestep
+        self._index_capacity = new_capacity
+
+    def _rebuild_indices_batch_np(self, evicted_episode_indices: set[int]) -> None:
+        """Remove evicted episode timestep indices via NumPy compaction."""
+        live = self._num_indices
+        if not evicted_episode_indices or live == 0:
+            return
+
+        episode_col = self._index_episode[:live]
+        if len(evicted_episode_indices) == 1:
+            evicted_idx = next(iter(evicted_episode_indices))
+            keep = episode_col != evicted_idx
+        else:
+            evicted = np.fromiter(
+                evicted_episode_indices,
+                dtype=self._index_episode.dtype,
+            )
+            keep = ~np.isin(episode_col, evicted)
+
+        new_size = int(np.count_nonzero(keep))
+        self._index_episode[:new_size] = self._index_episode[:live][keep]
+        self._index_timestep[:new_size] = self._index_timestep[:live][keep]
+        self._num_indices = new_size
+        self._indices = []
+
+    def _materialize_indices_for_fallback(self) -> None:
+        """Build RLlib-compatible list-of-tuples indices for parent fallbacks."""
+        self._indices = list(
+            zip(
+                self._index_episode[: self._num_indices].tolist(),
+                self._index_timestep[: self._num_indices].tolist(),
+                strict=True,
+            )
+        )
+
+
 class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
     """Replay buffer with SumTree-based prioritized sampling.
 
@@ -415,6 +825,7 @@ class PrioritizedSumTreeBuffer(PrioritizedEpisodeReplayBuffer):
 __all__ = [
     "BatchEvictEpisodeReplayBuffer",
     "FastSampleEpisodeReplayBuffer",
+    "NumpyIndexedFastSampleEpisodeReplayBuffer",
     "PrioritizedSumTreeBuffer",
     "SumTree",
 ]

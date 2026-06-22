@@ -13,6 +13,7 @@ from rlframework.utils.exceptions import (
 from rlframework.utils.replay_buffers import (
     BatchEvictEpisodeReplayBuffer,
     FastSampleEpisodeReplayBuffer,
+    NumpyIndexedFastSampleEpisodeReplayBuffer,
     PrioritizedSumTreeBuffer,
 )
 from rlframework.utils.torch_utils import (
@@ -31,6 +32,7 @@ __all__ = [
     "EnvironmentError",
     "FastSampleEpisodeReplayBuffer",
     "ModelError",
+    "NumpyIndexedFastSampleEpisodeReplayBuffer",
     "PrioritizedSumTreeBuffer",
     "RLFrameworkError",
     "RayInitError",

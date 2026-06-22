@@ -83,6 +83,42 @@ eps = copy.deepcopy(eps)
 
 本地 profiling 中，在去掉 metrics 影响后，`copy.deepcopy` 成为 `add()` 的主要耗时来源。
 
+这份 copy 是否“必要”，取决于 episode 的所有权语义。
+
+在 RLlib 默认实现里，它是防御性且有意义的。原因是 replay buffer 并不只是把 episode
+引用放进 `deque`，它后续可能会修改已经存进去的 episode：
+
+```python
+if eps.id_ in self.episode_id_to_index:
+    existing_eps = self.episodes[eps_idx - self._num_episodes_evicted]
+    existing_eps.concat_episode(eps)
+```
+
+`concat_episode()` 会修改 `existing_eps`，包括弹出边界 observation/info、扩展
+observations/actions/rewards、更新 `t`、terminated/truncated、custom data 等。如果
+第一次 add 时没有 deepcopy，而外部还持有同一个 episode 对象，那么后续同 ID chunk
+到来时，buffer 的拼接动作会直接改掉外部对象。
+
+没有 deepcopy 还会带来另一个风险：外部在 `add(eps)` 之后继续修改 `eps`，buffer 内部
+看到的也会变，因为两边指向同一个对象。
+
+所以更准确的结论是：
+
+```text
+默认 RLlib/通用库语义下：需要 deepcopy，保证 buffer 拥有自己的 episode 副本。
+受控训练路径下：如果能保证 add 之后外部不再持有/修改 episode，且同 ID 拼接不会影响外部对象，可以去掉。
+```
+
+`copy.copy(eps)` 这种浅拷贝通常不够，因为 `SingleAgentEpisode` 内部还有
+`InfiniteLookbackBuffer`、list、dict、numpy array 等可变对象，浅拷贝仍会共享内部数据。
+如果为了性能要去掉 deepcopy，最好把它做成显式配置，例如：
+
+```python
+copy_episodes_on_add=True  # 默认保持 RLlib 安全语义
+```
+
+只有在确认 episode 所有权已经转移给 replay buffer 时，才关闭它。
+
 ### 2. _indices 是 timestep 级 Python tuple/list
 
 `_indices` 不是 episode 级索引，而是 timestep 级索引：
