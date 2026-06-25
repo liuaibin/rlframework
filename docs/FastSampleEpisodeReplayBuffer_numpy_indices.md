@@ -936,3 +936,17 @@ fallback：
 ```
 
 第一版能显著降低 Python tuple/list 分配和 GC 压力，同时保持实现风险可控。等 profiling 证明 eviction 全量扫描仍然是主要瓶颈后，再升级到 live slots + swap-delete。
+
+
+NumPy compaction 快是因为：
+
+  同样是全量扫描，但它扫描的是连续 int64/int32 数组；
+  比较、过滤、复制主要在 NumPy/C 层完成；
+  避免了 Python tuple/list/int 的逐元素操作、引用计数和 GC 压力。
+
+  但要注意：
+
+  它不是 O(evicted_episode_len)
+  它仍然是 O(_num_indices)
+
+  只是这个 O(_num_indices) 的常数比 Python list-of-tuples 小很多
