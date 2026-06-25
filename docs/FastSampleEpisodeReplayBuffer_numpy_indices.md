@@ -112,6 +112,202 @@ episode_abs_idx = int(self._index_episode[slot])
 episode_ts = int(self._index_timestep[slot])
 ```
 
+## 当前实现的主要优化点
+
+`NumpyIndexedFastSampleEpisodeReplayBuffer` 当前最主要的优化点，就是把原来的：
+
+```python
+self._indices = [
+    (episode_abs_idx, timestep_in_episode),
+    ...
+]
+```
+
+换成两列 NumPy 数组：
+
+```python
+self._index_episode = np.empty(self._index_capacity, dtype=np.int64)
+self._index_timestep = np.empty(self._index_capacity, dtype=np.int32)
+self._num_indices = 0
+```
+
+也就是说，原来每个 timestep index 是一个 Python tuple：
+
+```python
+(episode_abs_idx, timestep_in_episode)
+```
+
+现在拆成：
+
+```text
+_index_episode[slot]   = episode_abs_idx
+_index_timestep[slot]  = timestep_in_episode
+```
+
+这样做主要有三类收益。
+
+### 1. 索引内存从 Python 对象变成连续数组
+
+原来的 `_indices` 是 Python list-of-tuples。假设 replay buffer 里有 100 万个 timestep，
+大概就是：
+
+```text
+1 个大 list
+100 万个 Python tuple
+大量 Python int 引用/对象
+```
+
+这些对象会带来：
+
+```text
+对象头开销
+指针跳转
+引用计数更新
+GC 压力
+内存碎片
+```
+
+NumPy 版变成两块连续内存：
+
+```text
+_index_episode:   int64 array
+_index_timestep:  int32 array
+```
+
+好处是：
+
+```text
+内存更紧凑
+cache locality 更好
+Python 对象数量少很多
+引用计数和 GC 压力更小
+```
+
+### 2. add 时批量写入，不再逐个创建 tuple
+
+原来的新增索引逻辑类似：
+
+```python
+self._indices.extend((eps_idx, i) for i in range(eps_len))
+```
+
+这会在 Python 层为每个 timestep 创建一个 tuple。
+
+NumPy 版改成：
+
+```python
+self._index_episode[write_slice] = eps_idx
+self._index_timestep[write_slice] = np.arange(
+    start_ts,
+    start_ts + length,
+    dtype=self._index_timestep.dtype,
+)
+```
+
+也就是：
+
+```text
+episode 列批量填同一个 eps_idx
+timestep 列批量填 start_ts..start_ts+length-1
+```
+
+Python 层只发起少量数组操作，实际填充主要由 NumPy/C 层完成。
+
+### 3. eviction rebuild 变成 NumPy compaction
+
+原来的 eviction 索引清理会重建 Python list：
+
+```python
+self._indices = [
+    idx_tuple
+    for idx_tuple in self._indices
+    if idx_tuple[0] not in evicted_episode_indices
+]
+```
+
+这会重新分配一个大 list，并处理大量 Python tuple 引用。
+
+NumPy 版改成：
+
+```python
+episode_col = self._index_episode[:live]
+keep = episode_col != evicted_idx
+
+self._index_episode[:new_size] = self._index_episode[:live][keep]
+self._index_timestep[:new_size] = self._index_timestep[:live][keep]
+self._num_indices = new_size
+```
+
+这仍然是全量扫描当前 index，但扫描和复制主要在 NumPy/C 层完成，不再创建新的
+Python list-of-tuples。
+
+### 固定内存的准确含义
+
+这个方案可以理解成“预分配索引数组，尽量复用这块索引内存”，但默认并不是绝对固定。
+
+当前实现默认：
+
+```python
+expand_index_capacity = True
+```
+
+原因是 RLlib 的 add 顺序是：
+
+```text
+先 append 新 episode 的 indices
+再 while 超过 capacity 时 evict 老 episode
+```
+
+因此在 add 的瞬间，索引数量可能短暂超过 `capacity`。例如：
+
+```text
+capacity = 1_000_000
+当前 _num_indices = 1_000_000
+新 episode 长度 = 1000
+
+append 瞬间需要 1_001_000 个 index slot
+evict 后才回落
+```
+
+如果 `_index_capacity` 正好等于 `capacity`，这一步会越界。因此当前实现允许在需要时扩容。
+
+如果希望严格固定内存，可以显式配置：
+
+```python
+replay_buffer_config = {
+    "type": NumpyIndexedFastSampleEpisodeReplayBuffer,
+    "capacity": 1_000_000,
+    "index_capacity": 1_001_000,
+    "expand_index_capacity": False,
+}
+```
+
+这样超过 `index_capacity` 时会报错，而不是动态扩容。
+
+### 不是已经做到 O(evicted_episode_len)
+
+需要注意，当前实现还没有做到“evict 只处理被删除 episode 的 timestep”。它仍然是：
+
+```text
+全量扫描当前 index + NumPy compaction
+```
+
+复杂度仍然接近：
+
+```text
+O(buffer 当前总 timestep 数)
+```
+
+只是相比 Python list-of-tuples rebuild，常数更低，Python 对象分配和 GC 压力更小。
+
+如果要进一步做到：
+
+```text
+O(evicted_episode_len)
+```
+
+需要再引入后文的 `live_slots + swap-delete + episode_to_slots` 方案。
+
 ## 推荐第一版：NumPy 固定数组 + eviction 时压缩
 
 第一版建议先做“固定数组 + NumPy compaction”。它不是最极致的版本，但收益大、风险低。
@@ -521,6 +717,154 @@ def _remove_slot(self, slot: int) -> None:
 
     self._num_live_slots -= 1
     self._free_slots.append(slot)
+```
+
+这里的关键是：
+
+```python
+self._live_slots[live_pos] = last_slot
+```
+
+这一步叫 “用最后一个 live slot 覆盖要删除的位置”。它的目的不是保持顺序，而是避免
+删除数组中间元素时整体搬移后面的元素。
+
+假设当前 live slot 是：
+
+```text
+index:       0   1   2   3   4
+live_slots: 10  11  12  13  14
+num_live = 5
+```
+
+现在要删除 slot `12`。它在 `live_slots` 里的位置是：
+
+```text
+live_pos = 2
+```
+
+也就是：
+
+```text
+index:       0   1   2   3   4
+live_slots: 10  11  12  13  14
+                    ^
+                  要删除
+```
+
+如果像普通 list 那样删除中间元素，需要把后面的 `13`、`14` 整体向前移动：
+
+```text
+删除 12 后:
+live_slots: 10  11  13  14
+
+13 从 index 3 移到 index 2
+14 从 index 4 移到 index 3
+```
+
+这种删除成本和后面剩余元素数量有关，数组越大越贵。
+
+swap-delete 的做法是不保持顺序，直接拿最后一个 live slot 填洞：
+
+```text
+last_live_pos = num_live - 1 = 4
+last_slot = live_slots[4] = 14
+
+live_slots[2] = 14
+num_live -= 1
+```
+
+删除后变成：
+
+```text
+index:       0   1   2   3 | 4
+live_slots: 10  11  14  13 | 14
+num_live = 4
+```
+
+注意，只有前 `num_live` 个位置有效，所以真正的 live 区域是：
+
+```text
+live_slots[:num_live] = [10, 11, 14, 13]
+```
+
+最后那个 index `4` 上残留的 `14` 已经在无效区，可以忽略。逻辑上看，slot `12` 已经被
+删除，剩下的 live slot 仍然是：
+
+```text
+{10, 11, 13, 14}
+```
+
+只是顺序从：
+
+```text
+[10, 11, 13, 14]
+```
+
+变成了：
+
+```text
+[10, 11, 14, 13]
+```
+
+对 replay buffer 的随机采样来说，顺序通常不重要，因为采样是：
+
+```python
+live_pos = int(self.rng.integers(self._num_live_slots))
+slot = int(self._live_slots[live_pos])
+```
+
+只要每个 live slot 都还在有效区里，顺序变化不会影响“能不能被采到”。
+
+同时还要更新反向索引：
+
+```python
+self._slot_to_live_pos[last_slot] = live_pos
+```
+
+因为 `last_slot = 14` 从位置 `4` 被搬到了位置 `2`，所以必须同步记录：
+
+```text
+slot_to_live_pos[14] = 2
+```
+
+最后，被删除的 slot `12` 不再 live，可以放进 free list，后续新增 timestep 时复用：
+
+```python
+self._free_slots.append(12)
+```
+
+完整过程可以写成：
+
+```text
+删除 slot 12:
+
+1. live_pos = slot_to_live_pos[12] = 2
+2. last_live_pos = num_live - 1 = 4
+3. last_slot = live_slots[4] = 14
+4. live_slots[2] = 14
+5. slot_to_live_pos[14] = 2
+6. num_live -= 1
+7. free_slots.append(12)
+```
+
+删除前：
+
+```text
+live_slots[:5] = [10, 11, 12, 13, 14]
+```
+
+删除后：
+
+```text
+live_slots[:4] = [10, 11, 14, 13]
+free_slots = [12]
+```
+
+一句话总结：
+
+```text
+swap-delete 是用最后一个有效元素填掉被删除元素留下的洞，
+用“顺序不稳定”换取“不整体搬移数组”的 O(1) 单 slot 删除。
 ```
 
 evict 一个 episode 时：
