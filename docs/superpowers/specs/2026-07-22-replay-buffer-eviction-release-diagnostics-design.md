@@ -32,13 +32,13 @@ track_evicted_episode_refs: bool = False
 
 When disabled, the hot path will only perform the explicit local-reference deletion and will not create weak references or walk episode payloads.
 
-When enabled, the buffer will record weak references immediately before dropping an evicted episode. It will track:
+When enabled, the buffer will record weak references immediately before dropping an evicted episode. `SingleAgentEpisode` uses `__slots__` without `__weakref__` in Ray 2.49.2, so the episode object itself cannot be weak-referenced. The diagnostics will instead track:
 
-- the `SingleAgentEpisode` object;
+- the episode's `InfiniteLookbackBuffer` containers for observations, actions, rewards, infos, and extra model outputs as proxies for episode-container lifetime;
 - NumPy arrays in observations, actions, rewards, infos, extra model outputs, and custom data;
 - NumPy arrays encountered through each tracked array's `.base` chain, so a sampled view retaining a root array is visible.
 
-Diagnostics will keep separate bounded windows containing the most recent 10,000 episode weak references and 10,000 array weak references. Reaching a bound drops the oldest diagnostic handle only; it never changes episode lifetime.
+Diagnostics will keep separate bounded windows containing the most recent 10,000 container weak references and 10,000 array weak references. Reaching a bound drops the oldest diagnostic handle only; it never changes episode lifetime.
 
 The buffer will expose:
 
@@ -50,14 +50,14 @@ The result will contain the current diagnostic window counts:
 
 ```python
 {
-    "tracked_episode_refs": int,
-    "pending_episode_refs": int,
+    "tracked_container_refs": int,
+    "pending_container_refs": int,
     "tracked_array_refs": int,
     "pending_array_refs": int,
 }
 ```
 
-The tracked counts are the number of weak-reference handles currently present in each bounded window. The pending counts are the handles in that window whose referents remain alive. Dead handles remain in the window until displaced by newer evictions, allowing one call to show both tracked and released objects without retaining those objects. A pending episode means some Python code still owns the episode object. A pending array with no pending episode means a downstream NumPy view still owns the episode's backing storage.
+The tracked counts are the number of weak-reference handles currently present in each bounded window. The pending counts are the handles in that window whose referents remain alive. Dead handles remain in the window until displaced by newer evictions, allowing one call to show both tracked and released objects without retaining those objects. Pending containers mean some Python code still owns the episode or its lookback buffers. Pending arrays with no pending containers mean downstream NumPy views still own the episode's backing storage.
 
 This API reports Python and NumPy ownership only. Ray Dashboard or `ray memory` remains the source of truth for Plasma used/pinned bytes.
 
@@ -71,7 +71,7 @@ If diagnostics show pending arrays, the correct remediation is to remove the own
 
 Tests will cover both `FastSampleEpisodeReplayBuffer` and `NumpyIndexedFastSampleEpisodeReplayBuffer` with `copy_episodes_on_add=False`.
 
-1. Evicting an episode with no downstream sample releases its episode and NumPy backing arrays after caller references are removed.
+1. Evicting an episode with no downstream sample releases its lookback containers and NumPy backing arrays after caller references are removed.
 2. Retaining a sampled transition after eviction leaves the source backing array pending.
 3. Deleting the sampled transition releases the pending backing array.
 4. Diagnostics disabled by default create no tracked references and preserve existing buffer behavior.
