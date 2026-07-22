@@ -291,6 +291,21 @@ class TestReplayBuffers:
             len_lookback_buffer=0,
         )
 
+    @staticmethod
+    def _make_numpy_episode(episode_id: str, length: int = 2):
+        import numpy as np
+        from ray.rllib.env.single_agent_episode import SingleAgentEpisode
+
+        return SingleAgentEpisode(
+            id_=episode_id,
+            observations=np.arange((length + 1) * 2, dtype=np.float32).reshape(length + 1, 2),
+            infos=[{} for _ in range(length + 1)],
+            actions=np.arange(length * 2, dtype=np.float32).reshape(length, 2),
+            rewards=np.ones(length, dtype=np.float32),
+            terminated=True,
+            len_lookback_buffer=0,
+        )
+
     def test_public_replay_buffer_exports(self):
         import rlframework.utils as utils
         from rlframework.utils import replay_buffers
@@ -370,6 +385,103 @@ class TestReplayBuffers:
 
         assert copied_buffer.episodes[0] is not copied_episode
         assert owned_buffer.episodes[0] is owned_episode
+
+    @pytest.mark.parametrize(
+        "buffer_name",
+        ["FastSampleEpisodeReplayBuffer", "NumpyIndexedFastSampleEpisodeReplayBuffer"],
+    )
+    def test_eviction_diagnostics_report_released_backing(self, buffer_name):
+        import gc
+
+        from rlframework.utils import replay_buffers
+
+        buffer_type = getattr(replay_buffers, buffer_name)
+        buffer = buffer_type(
+            capacity=2,
+            copy_episodes_on_add=False,
+            track_evicted_episode_refs=True,
+        )
+        episode = self._make_numpy_episode("A")
+        observation_backing = episode.observations.data
+        buffer.add(episode)
+
+        del observation_backing
+        del episode
+        buffer.add(self._make_numpy_episode("B"))
+        gc.collect()
+
+        stats = buffer.get_evicted_episode_release_stats()
+        assert stats["tracked_container_refs"] >= 4
+        assert stats["pending_container_refs"] == 0
+        assert stats["tracked_array_refs"] >= 3
+        assert stats["pending_array_refs"] == 0
+
+    @pytest.mark.parametrize(
+        "buffer_name",
+        ["FastSampleEpisodeReplayBuffer", "NumpyIndexedFastSampleEpisodeReplayBuffer"],
+    )
+    def test_eviction_diagnostics_detect_sampled_view_retention(self, buffer_name):
+        import gc
+
+        import numpy as np
+
+        from rlframework.utils import replay_buffers
+
+        buffer_type = getattr(replay_buffers, buffer_name)
+        buffer = buffer_type(
+            capacity=2,
+            copy_episodes_on_add=False,
+            track_evicted_episode_refs=True,
+        )
+        episode = self._make_numpy_episode("A")
+        observation_backing = episode.observations.data
+        buffer.add(episode)
+        buffer.rng = np.random.default_rng(123)
+        sample = buffer.sample(
+            sample_episodes=True,
+            batch_size_B=1,
+            batch_length_T=None,
+            n_step=1,
+            lookback=0,
+        )
+        assert np.shares_memory(
+            sample[0].get_observations(0),
+            observation_backing,
+        )
+
+        del observation_backing
+        del episode
+        buffer.add(self._make_numpy_episode("B"))
+        gc.collect()
+
+        retained_stats = buffer.get_evicted_episode_release_stats()
+        assert retained_stats["pending_container_refs"] == 0
+        assert retained_stats["pending_array_refs"] > 0
+
+        del sample
+        gc.collect()
+
+        released_stats = buffer.get_evicted_episode_release_stats()
+        assert released_stats["pending_array_refs"] == 0
+
+    @pytest.mark.parametrize(
+        "buffer_name",
+        ["FastSampleEpisodeReplayBuffer", "NumpyIndexedFastSampleEpisodeReplayBuffer"],
+    )
+    def test_eviction_diagnostics_are_disabled_by_default(self, buffer_name):
+        from rlframework.utils import replay_buffers
+
+        buffer_type = getattr(replay_buffers, buffer_name)
+        buffer = buffer_type(capacity=2, copy_episodes_on_add=False)
+        buffer.add(self._make_numpy_episode("A"))
+        buffer.add(self._make_numpy_episode("B"))
+
+        assert buffer.get_evicted_episode_release_stats() == {
+            "tracked_container_refs": 0,
+            "pending_container_refs": 0,
+            "tracked_array_refs": 0,
+            "pending_array_refs": 0,
+        }
 
     def test_fast_sample_matches_batch_evict_transition_sampling(self):
         import numpy as np
