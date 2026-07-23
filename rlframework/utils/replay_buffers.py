@@ -27,9 +27,6 @@ Or use the string path for YAML configs::
 
 import copy
 import hashlib
-import weakref
-from collections import deque
-from collections.abc import Iterator, Mapping
 from typing import Any, Union, cast
 
 import numpy as np
@@ -44,8 +41,6 @@ from ray.rllib.utils.replay_buffers.episode_replay_buffer import EpisodeReplayBu
 from ray.rllib.utils.replay_buffers.prioritized_episode_buffer import (
     PrioritizedEpisodeReplayBuffer,
 )
-
-_EVICTED_REF_DIAGNOSTIC_LIMIT = 10_000
 
 
 class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
@@ -62,17 +57,10 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
         self,
         *args: Any,
         copy_episodes_on_add: bool = True,
-        track_evicted_episode_refs: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.copy_episodes_on_add = copy_episodes_on_add
-        self.track_evicted_episode_refs = track_evicted_episode_refs
-        self._evicted_container_refs: deque[weakref.ReferenceType[Any]] | None = None
-        self._evicted_array_refs: deque[weakref.ReferenceType[np.ndarray]] | None = None
-        if track_evicted_episode_refs:
-            self._evicted_container_refs = deque(maxlen=_EVICTED_REF_DIAGNOSTIC_LIMIT)
-            self._evicted_array_refs = deque(maxlen=_EVICTED_REF_DIAGNOSTIC_LIMIT)
 
     @override(ReplayBufferInterface)
     def add(
@@ -145,8 +133,6 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
                 evicted_episode_indices.add(evicted_idx)
 
                 self._num_episodes_evicted += 1
-                self._track_evicted_episode_references(evicted_eps)
-                del evicted_eps
 
         if evicted_episode_indices:
             self._rebuild_indices_batch(evicted_episode_indices)
@@ -180,78 +166,6 @@ class BatchEvictEpisodeReplayBuffer(EpisodeReplayBuffer):
                 for idx_tuple in self._indices
                 if idx_tuple[0] not in evicted_episode_indices
             ]
-
-    @staticmethod
-    def _iter_numpy_arrays(value: Any) -> Iterator[np.ndarray]:
-        """Yield NumPy arrays from supported nested episode payloads."""
-        stack = [value]
-        seen: set[int] = set()
-        while stack:
-            current = stack.pop()
-            current_id = id(current)
-            if current_id in seen:
-                continue
-            seen.add(current_id)
-
-            if isinstance(current, np.ndarray):
-                yield current
-            elif isinstance(current, InfiniteLookbackBuffer):
-                stack.append(current.data)
-            elif isinstance(current, Mapping):
-                stack.extend(current.values())
-            elif isinstance(current, (list, tuple, set, frozenset)):
-                stack.extend(current)
-
-    def _track_evicted_episode_references(self, eps: SingleAgentEpisode) -> None:
-        """Record non-owning handles for an episode about to be evicted."""
-        if self._evicted_container_refs is None or self._evicted_array_refs is None:
-            return
-
-        containers = [
-            eps.observations,
-            eps.actions,
-            eps.rewards,
-            eps.infos,
-            *eps.extra_model_outputs.values(),
-        ]
-        seen_containers: set[int] = set()
-        for container in containers:
-            container_id = id(container)
-            if container_id in seen_containers:
-                continue
-            seen_containers.add(container_id)
-            try:
-                self._evicted_container_refs.append(weakref.ref(container))
-            except TypeError:
-                continue
-
-        seen_arrays: set[int] = set()
-        for array in self._iter_numpy_arrays([containers, eps.custom_data]):
-            current: Any = array
-            while isinstance(current, np.ndarray):
-                current_id = id(current)
-                if current_id not in seen_arrays:
-                    seen_arrays.add(current_id)
-                    self._evicted_array_refs.append(weakref.ref(current))
-                current = current.base
-
-    def get_evicted_episode_release_stats(self) -> dict[str, int]:
-        """Return live-reference counts from the bounded diagnostic windows."""
-        if self._evicted_container_refs is None or self._evicted_array_refs is None:
-            return {
-                "tracked_container_refs": 0,
-                "pending_container_refs": 0,
-                "tracked_array_refs": 0,
-                "pending_array_refs": 0,
-            }
-        return {
-            "tracked_container_refs": len(self._evicted_container_refs),
-            "pending_container_refs": sum(
-                ref() is not None for ref in self._evicted_container_refs
-            ),
-            "tracked_array_refs": len(self._evicted_array_refs),
-            "pending_array_refs": sum(ref() is not None for ref in self._evicted_array_refs),
-        }
 
     def _copy_episode_for_add(self, eps: SingleAgentEpisode) -> SingleAgentEpisode:
         """Return the episode object that should be owned by the replay buffer."""
@@ -553,8 +467,6 @@ class NumpyIndexedFastSampleEpisodeReplayBuffer(FastSampleEpisodeReplayBuffer):
                 evicted_episode_indices.add(evicted_idx)
 
                 self._num_episodes_evicted += 1
-                self._track_evicted_episode_references(evicted_eps)
-                del evicted_eps
 
         if evicted_episode_indices:
             self._rebuild_indices_batch_np(evicted_episode_indices)
@@ -807,7 +719,8 @@ class NumpyIndexedFastSampleEpisodeReplayBuffer(FastSampleEpisodeReplayBuffer):
             return
         if not self._expand_index_capacity:
             raise BufferError(
-                f"Replay index capacity exceeded: need {required}, capacity={self._index_capacity}"
+                f"Replay index capacity exceeded: need {required}, "
+                f"capacity={self._index_capacity}"
             )
 
         new_capacity = max(required, int(max(self._index_capacity, 1) * 1.5))

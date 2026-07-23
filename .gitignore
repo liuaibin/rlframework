@@ -15,7 +15,6 @@ MANIFEST
 venv/
 env/
 .env
-.worktrees/
 
 # uv
 .uv/

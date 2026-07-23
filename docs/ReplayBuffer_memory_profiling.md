@@ -150,28 +150,3 @@ report_memory(algo, "fast_step_500000")
 4. 在相同 sampled env steps 处分别保存 Fast 和 NumPy snapshot。
 5. 如果问题只在超大容量下出现，考虑使用能分析 native allocation peak 的工具，而不是长期启用 `tracemalloc`。
 
-## 检查 eviction 后的引用释放
-
-使用零拷贝写入时，可临时启用弱引用诊断：
-
-```python
-replay_buffer_config = {
-    "type": NumpyIndexedFastSampleEpisodeReplayBuffer,
-    "capacity": 1_000_000,
-    "copy_episodes_on_add": False,
-    "track_evicted_episode_refs": True,
-}
-```
-
-读取统计：
-
-```python
-stats = algo.local_replay_buffer.get_evicted_episode_release_stats()
-print(stats)
-```
-
-- `pending_container_refs > 0`：episode 或其 lookback container 仍被外部代码持有。
-- `pending_container_refs == 0` 且 `pending_array_refs > 0`：通常是 sampled NumPy view 或 Learner in-flight batch 仍持有底层数组。
-- 两个 pending 都为 0：Python/NumPy 引用已释放；若 RSS 不下降，应继续检查 Ray Plasma 的 used/pinned bytes，而不是调用 `gc.collect()`。
-
-该诊断最多保留最近 10,000 个 container 和 array 弱引用，默认关闭。它不会复制 episode，不会强制释放 Ray 对象，也不会在训练热路径调用垃圾回收。
